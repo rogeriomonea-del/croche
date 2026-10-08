@@ -80,8 +80,9 @@ RFC 4180 puro (sem linha `sep=`).
 - Um processo serve API (`/api/*`) e a SPA buildada (fallback para `index.html`).
 
 ### 9.2 Contas e sessões
-- E-mail normalizado (trim + minúsculas, ≤ 254, um `@`, sem espaços). Senha 10–256 caracteres, sem
-  regras de composição (NIST 800-63B). Hash argon2id (m = 19 MiB, t = 2, p = 1).
+- E-mail normalizado (trim + minúsculas, ≤ 254, um `@`, sem espaços nem caracteres de controle).
+  Senha 10–256 caracteres, sem regras de composição (NIST 800-63B). Hash argon2id (m = 19 MiB,
+  t = 2, p = 1).
 - Cadastro público só com `ALLOW_SIGNUP=true` (padrão `false`). Contas também por CLI.
 - Login com e-mail inexistente ou senha errada: mesma resposta (`401 invalid_credentials`) e tempo
   equivalente (verifica contra hash fictício).

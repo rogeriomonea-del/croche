@@ -37,6 +37,10 @@ describe('emailError', () => {
     ['@example.com', 'Email must have exactly one @ with text on both sides'],
     ['ro@', 'Email must have exactly one @ with text on both sides'],
     ['ro@localhost', 'Email domain must contain a dot'],
+    ['\x1b[2j\x1b]0;pwned\x07evil@x.co', 'Email must not contain control characters'],
+    ['ro\x00@example.com', 'Email must not contain control characters'],
+    ['ro@example.com\x7f', 'Email must not contain control characters'],
+    ['ro\x9b2j@example.com', 'Email must not contain control characters'],
   ])('rejects %j', (email, error) => {
     expect(emailError(email)).toBe(error)
   })

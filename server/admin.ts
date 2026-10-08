@@ -43,10 +43,15 @@ export function formatUserList(db: Database): string {
   if (users.length === 0) return 'No users\n'
   const rows = [
     ['EMAIL', 'CREATED', 'SESSIONS', 'PATTERNS', 'ID'],
-    ...users.map((u) => [u.email, new Date(u.created_at).toISOString(), String(u.sessions), String(u.patterns), u.id]),
+    ...users.map((u) => [printable(u.email), new Date(u.created_at).toISOString(), String(u.sessions), String(u.patterns), u.id]),
   ]
   const widths = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)))
   return rows.map((r) => r.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd()).join('\n') + '\n'
+}
+
+// Addresses stored before emailError rejected control characters must not drive the terminal.
+function printable(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)
 }
 
 /** Consistent copy of a live database (SQLite online backup), safe while the server runs. */

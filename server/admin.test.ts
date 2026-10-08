@@ -5,6 +5,7 @@ import { Readable } from 'node:stream'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { backupDatabase, CliError, createUser, formatUserList, removeUser, runCli, setUserPassword, type CliDeps } from './admin'
 import { buildApp } from './app'
+import { insertUser } from './auth/users'
 import { openDatabase } from './db'
 import { get, makeApp, PASSWORD, postJson, sessionCookie, testConfig, type TestApp } from './test/helpers'
 
@@ -77,6 +78,14 @@ describe('admin functions', () => {
     expect(lines[0]).toMatch(/^EMAIL\s+CREATED\s+SESSIONS\s+PATTERNS\s+ID$/)
     expect(lines[1]).toMatch(/^ro@example\.com\s+2026-10-08T12:00:00\.000Z\s+0\s+0\s+[0-9a-f-]{36}$/)
     expect(() => removeUser(t!.db, 'gone@example.com')).toThrow(/No user/)
+  })
+
+  it('lists a stored address with control characters escaped', async () => {
+    t = await makeApp()
+    insertUser(t.db, '\x1b[2j\x07evil@x.co', 'hash', Date.parse('2026-10-08T12:00:00Z'))
+    const listing = formatUserList(t.db)
+    expect(listing).not.toMatch(/[\x1b\x07]/)
+    expect(listing).toContain('\\x1b[2j\\x07evil@x.co')
   })
 
   it('backs up to a new file and refuses to overwrite', async () => {

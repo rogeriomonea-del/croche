@@ -103,6 +103,8 @@ export function emailError(email: string): string | null {
   if (e.length === 0) return 'Email is required'
   if (e.length > EMAIL_MAX) return `Email must be at most ${EMAIL_MAX} characters`
   if (/\s/.test(e)) return 'Email must not contain spaces'
+  // ESC, BEL and the like would reach the operator's terminal through the CLI's user listing.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(e)) return 'Email must not contain control characters'
   const parts = e.split('@')
   if (parts.length !== 2 || parts[0] === '' || parts[1] === '') return 'Email must have exactly one @ with text on both sides'
   if (!parts[1].includes('.')) return 'Email domain must contain a dot'
