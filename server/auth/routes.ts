@@ -121,6 +121,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
 
       const user = findUserByLogin(db, identifier)
       // Every identifier of a real account shares the same bucket, including password changes.
+      // Accepted cost (SPEC §9.3): once locked through its login name, the account's e-mail answers
+      // 429 where unknown e-mails answer 401, which links the name to the e-mail.
       const throttleKey = user?.email ?? identifier
       assertNotLocked(reply, throttleKey)
       let ok = false

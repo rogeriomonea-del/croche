@@ -109,6 +109,9 @@ RFC 4180 puro (sem linha `sep=`).
   senha e exclusão de conta) bloqueiam a conta até a janela fechar (`429 rate_limited`).
   Para contas existentes, a chave de bloqueio é sempre o e-mail canônico; identificadores
   desconhecidos são contados pelo nome/e-mail normalizado.
+  Custo aceito: como nome e e-mail da conta compartilham o bloqueio, quem trava uma conta pelo nome
+  de login vê `429` ao tentar o e-mail dessa conta e `401` em e-mails inexistentes, ligando o nome ao
+  e-mail. Fora de um bloqueio, identificador inexistente e senha errada seguem indistinguíveis.
 - Helmet com CSP `default-src 'self'` (sem `unsafe-inline`), `frame-ancestors 'none'`.
 - Log sem corpo de requisição; cookies e `set-cookie` redigidos.
 - Padrão de outro usuário responde `404`, nunca `403`. IDs são UUID v4.
