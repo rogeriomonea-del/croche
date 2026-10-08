@@ -6,6 +6,9 @@ direto na internet.
 
 Há dois caminhos. Escolha **um**:
 
+> **VPS com Coolify** (como o `srv1842462` da Hostinger): siga
+> [`docs/DEPLOY-COOLIFY.md`](DEPLOY-COOLIFY.md). O Coolify já tem proxy e HTTPS nas portas 80/443.
+
 - **A — Docker Compose** (recomendado): tudo em containers; o Caddy opcional cuida do HTTPS sozinho.
 - **B — Node + systemd + nginx**: sem Docker, com o certificado emitido pelo certbot.
 

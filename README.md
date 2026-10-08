@@ -93,7 +93,8 @@ PUBLIC_ORIGIN=http://127.0.0.1:3000 npm start
 ```
 
 Para produção com HTTPS, use as configurações existentes em
-[`docs/DEPLOY.md`](docs/DEPLOY.md) e [`.env.example`](.env.example).
+[`docs/DEPLOY.md`](docs/DEPLOY.md) e [`.env.example`](.env.example). No VPS da Hostinger com
+Coolify, siga [`docs/DEPLOY-COOLIFY.md`](docs/DEPLOY-COOLIFY.md).
 
 O núcleo do crochê e seus golden tests foram preservados: cada célula guarda somente um booleano,
 e suas cores e pontos altos são derivados. O formato JSON e a persistência de padrões por revisão
