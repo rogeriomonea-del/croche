@@ -50,6 +50,18 @@ via IPv6 o Docker esconderia o IP real dos visitantes e todos dividiriam o mesmo
 Confira: `https://crochetvictorioso.com.br/api/health` deve responder `{"ok":true}` e a página
 inicial deve mostrar a tela de entrada do Crochet Victorioso.
 
+### Alternativa: pela API do Coolify
+
+Com um token da API do Coolify (Keys & Tokens, permissões *read*, *write* e *deploy*) salvo num
+arquivo fora do repositório, o script faz os passos 2–10 acima e acompanha o build:
+
+```sh
+COOLIFY_URL=https://coolify.celestiaflights.com COOLIFY_TOKEN_FILE=~/coolify-token \
+  python3 deploy/coolify-deploy.py
+```
+
+`STEP=inspect` só lista servidores, projetos e apps. Apague o token quando terminar.
+
 ## 2. Criar sua conta
 
 Com o cadastro público desligado, a conta é criada pelo terminal do container. No Coolify, abra o
