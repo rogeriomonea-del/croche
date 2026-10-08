@@ -120,8 +120,9 @@ um usuário de sistema `mosaic` que só lê o código, e o banco fica em `/var/l
    sudo install -m 640 -o root -g mosaic .env.example /etc/mosaic-crochet.env
    sudoedit /etc/mosaic-crochet.env
    ```
-   Ajuste `PUBLIC_ORIGIN` e **descomente** `HOST` e `DATABASE_PATH` (sem Docker eles são
-   necessários; o serviço só pode escrever em `/var/lib/mosaic-crochet`):
+   Ajuste `PUBLIC_ORIGIN` e **descomente** `DATABASE_PATH`: o serviço só pode escrever em
+   `/var/lib/mosaic-crochet`, e o padrão (`./data`, dentro do código) é somente leitura para ele.
+   `HOST=127.0.0.1` já é o padrão; descomentar só deixa isso explícito.
    ```ini
    PUBLIC_ORIGIN=https://mosaic.example.com
    TRUST_PROXY=1
