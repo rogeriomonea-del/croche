@@ -28,6 +28,8 @@ Nos exemplos, troque `mosaic.example.com` pelo seu domínio e `voce@exemplo.com`
 
 - VPS Linux com Debian 12 ou Ubuntu 22.04+ (x86-64 ou ARM64). 1 vCPU e 1 GB de RAM bastam.
 - Um domínio (ou subdomínio) com registro DNS `A` (e `AAAA`, se houver IPv6) apontando para o VPS.
+  O Caddy do caminho A roda na rede do host justamente para ver o IPv6 real de cada visitante
+  ([seção 8](#8-public_origin-cookie_secure-e-trust_proxy)).
 - Portas 80 e 443 liberadas no firewall do provedor e no do servidor, por exemplo:
   ```sh
   sudo ufw allow OpenSSH
@@ -44,7 +46,8 @@ Nos exemplos, troque `mosaic.example.com` pelo seu domínio e `voce@exemplo.com`
 
 A imagem roda como o usuário `node` (uid 1000), escuta na porta 3000 dentro do container e guarda o
 banco em `/data/mosaic.db`, que é a pasta `./data` do projeto no host. O compose publica a porta só
-em `127.0.0.1:3000`: de fora, o acesso é pelo Caddy (portas 80/443).
+em `127.0.0.1:3000`: de fora, o acesso é pelo Caddy, que roda na rede do host (portas 80/443 do VPS)
+e repassa para esse endereço.
 
 Os comandos `docker` abaixo precisam de `sudo` se o seu usuário não estiver no grupo `docker`.
 
@@ -74,10 +77,9 @@ Os comandos `docker` abaixo precisam de `sudo` se o seu usuário não estiver no
    Se a pasta já existe, `sudo chown 1000:1000 data && sudo chmod 700 data`. No host, o dono é
    quem tiver o uid 1000; no Ubuntu costuma ser o primeiro usuário criado, que assim também lê o
    banco. Se isso não serve, não crie contas com esse uid no VPS.
-4. **Coloque o seu domínio no Caddyfile.**
-   ```sh
-   sed -i 's/mosaic\.example\.com/SEU-DOMINIO/g' deploy/Caddyfile
-   ```
+4. **Não edite o `deploy/Caddyfile`.** O Caddy usa como endereço do site o `PUBLIC_ORIGIN` do
+   `.env` (o compose repassa a variável), então o certificado sai para o mesmo domínio que o app
+   aceita. Editar o arquivo faria o `git pull` das atualizações falhar.
 5. **Suba o app e o Caddy.** O primeiro build leva alguns minutos.
    ```sh
    docker compose --profile caddy up -d --build
@@ -262,7 +264,9 @@ As migrações do banco rodam sozinhas quando o app inicia. Faça um backup ante
 voltar para a versão anterior do código depois de uma migração, o app antigo se recusa a abrir um
 banco mais novo, e aí é preciso restaurar esse backup.
 
-**Caminho A:**
+**Caminho A:** se você editou o `deploy/Caddyfile` seguindo uma versão antiga deste guia, desfaça
+antes com `git checkout deploy/Caddyfile` (o domínio agora vem do `PUBLIC_ORIGIN`), senão o
+`git pull` para com `Your local changes ... would be overwritten`.
 ```sh
 cd /srv/mosaic-crochet
 docker compose exec -T app node dist-server/cli.js db:backup /data/backups/antes-de-atualizar-$(date +%F-%H%M).db
@@ -317,6 +321,9 @@ cadeia inteira de `X-Forwarded-For`, inclusive no que o próprio visitante escre
 
 Para conferir: os logs do app mostram `remoteAddress` em cada requisição; com `TRUST_PROXY` certo,
 aparece o IP de quem acessou, e não o do proxy (`172.x.x.x` no Docker, `127.0.0.1` no systemd).
+Visitantes por IPv6 também aparecem com o próprio IP: por isso o Caddy do compose usa
+`network_mode: host`. Com portas publicadas na rede padrão do Docker (só IPv4), quem chega por IPv6
+entraria com o IP do gateway (`172.x.0.1`), e todos os visitantes IPv6 dividiriam um único limite.
 
 ## 9. Todas as variáveis
 
@@ -351,6 +358,6 @@ Logs: `docker compose logs -f app` (A) ou `journalctl -u mosaic-crochet -f` (B).
 | A (Docker): `unable to open database file` ou `EACCES` em `/data` | A pasta `./data` não pertence ao uid 1000: `sudo chown -R 1000:1000 data`. |
 | B (systemd): `read-only file system` ao abrir o banco | `DATABASE_PATH` fora de `/var/lib/mosaic-crochet`; o serviço só escreve lá. |
 | Mudou o `.env` e nada aconteceu | `docker compose restart` não relê o `.env`; use `docker compose up -d`. |
-| O Caddy não consegue o certificado | DNS ainda não aponta para o VPS, portas 80/443 fechadas ou domínio errado no `deploy/Caddyfile`. Veja `docker compose logs caddy`. |
+| O Caddy não consegue o certificado | DNS ainda não aponta para o VPS, portas 80/443 fechadas ou domínio errado no `PUBLIC_ORIGIN` do `.env` (o Caddy usa o mesmo endereço). Veja `docker compose logs caddy`. |
 | nginx responde `502 Bad Gateway` | O app não está rodando ou não está na porta 3000: `systemctl status mosaic-crochet` ou `docker compose ps`. |
 | `Database schema version N is newer than this build supports` | O código voltou para uma versão anterior depois de uma migração. Volte para a versão nova ou restaure o backup feito antes de atualizar. |

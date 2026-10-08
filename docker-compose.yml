@@ -18,10 +18,13 @@ services:
     profiles: ['caddy']
     depends_on:
       - app
-    ports:
-      - '80:80'
-      - '443:443'
-      - '443:443/udp'
+    # Rede do host, e não portas publicadas: a rede padrão do compose é só IPv4, e o Docker repassa
+    # quem chega por IPv6 com o IP do gateway (172.x.0.1). Todo visitante IPv6 dividiria um único
+    # limite de requisições e de logins. Aqui o Caddy escuta direto nas portas 80/443 do VPS.
+    network_mode: host
+    environment:
+      # Endereço do site no Caddyfile; vem do .env, o mesmo que o app usa.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?defina PUBLIC_ORIGIN no .env}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

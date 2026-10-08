@@ -1,16 +1,20 @@
 # Caddy na frente do app (docker compose --profile caddy). O certificado HTTPS (Let's Encrypt) é
 # emitido e renovado sozinho: basta o DNS do domínio apontar para o VPS e as portas 80/443 abertas.
 #
-# Troque mosaic.example.com pelo seu domínio. Ele precisa ser o mesmo de PUBLIC_ORIGIN no .env
-# (PUBLIC_ORIGIN=https://mosaic.example.com), e o .env precisa de TRUST_PROXY=1.
+# Não edite este arquivo: o endereço do site vem de PUBLIC_ORIGIN no .env (o compose o repassa ao
+# Caddy), então o domínio do certificado é sempre o mesmo que o app aceita. O .env precisa de
+# TRUST_PROXY=1.
+{
+	# Sem API de administração: com network_mode host ela ficaria em localhost:2019 do VPS, aberta a
+	# qualquer conta da máquina. Para aplicar mudanças: docker compose --profile caddy restart caddy.
+	admin off
+	# Opcional: e-mail para avisos do Let's Encrypt.
+	# email voce@exemplo.com
+}
 
-# Opcional: e-mail para avisos do Let's Encrypt.
-# {
-# 	email voce@exemplo.com
-# }
-
-mosaic.example.com {
+{$PUBLIC_ORIGIN} {
 	encode zstd gzip
 	# O Caddy substitui X-Forwarded-For pelo IP real do cliente (ignora o que o cliente mandou).
-	reverse_proxy app:3000
+	# 127.0.0.1:3000 é a porta que o compose publica para o app (o Caddy roda na rede do host).
+	reverse_proxy 127.0.0.1:3000
 }
