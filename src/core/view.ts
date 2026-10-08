@@ -1,3 +1,4 @@
+import { at, type Matrix } from './grid'
 import { canToggle } from './toggle'
 
 export type View = 'simulation' | 'schematic'
@@ -16,4 +17,13 @@ export function resolveClick(view: View, r: number, c: number, rows: number): Cl
   if (canToggle(target, rows)) return { ok: true, r: target, c }
   if (view === 'schematic') return { ok: false, reason: 'no-anchor' }
   return { ok: false, reason: r === 1 ? 'base-row' : 'top-row' }
+}
+
+/**
+ * Cells to outline in red. A conflict belongs to the dc (X) cells (SPEC §3.4): schematic shows them
+ * where they are; simulation shows the cells those dc cover, one row lower.
+ */
+export function conflictOutline(view: View, conflictX: Matrix): Matrix {
+  if (view === 'schematic') return conflictX
+  return conflictX.map((row, i) => row.map((_, j) => at(conflictX, i + 2, j + 1)))
 }

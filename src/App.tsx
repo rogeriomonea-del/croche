@@ -18,7 +18,7 @@ function blockedMessage(reason: BlockedReason, r: number): string {
     case 'top-row':
       return `Row ${r} is the top row: no row above it can work the dc that would cover this cell.`
     case 'no-anchor':
-      return `A dc on row ${r} would drop into row ${r - 2}, which does not exist. The first dc goes on row 3.`
+      return `Row ${r} cannot hold a dc: a dc drops two rows down, so the first one goes on row 3.`
   }
 }
 
@@ -66,7 +66,7 @@ export default function App() {
     link.href = url
     link.download = `mosaic-${rows}x${cols}.csv`
     link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   return (
@@ -79,10 +79,16 @@ export default function App() {
       <main className="mx-auto max-w-7xl space-y-3 p-4">
         <Toolbar
           view={view}
-          onViewChange={setView}
+          onViewChange={(v) => {
+            setView(v)
+            setNotice(null)
+          }}
           rows={rows}
           cols={cols}
-          onResize={(r, c) => dispatch({ type: 'resize', rows: r, cols: c })}
+          onResize={(r, c) => {
+            dispatch({ type: 'resize', rows: r, cols: c })
+            setNotice(null)
+          }}
           colors={design.colors}
           onColorChange={(yarn, color) => dispatch({ type: 'setColor', yarn, color })}
           onSwapColors={() => dispatch({ type: 'swapColors' })}

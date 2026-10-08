@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { at, cellsOf, conflicts, deriveX, emptyMatrix, instructions, toggle } from '.'
+import { at, cellsOf, conflictOutline, conflicts, deriveX, emptyMatrix, instructions, toggle } from '.'
 
 // SPEC §5: real output of the original app on a 15×20 grid. Mandatory.
 const ROWS = 15
@@ -42,6 +42,9 @@ describe('§5 golden vectors', () => {
     )
     // Column 5 rows 6–7, column 12 rows 4–6.
     expect(cellsOf(conflicts(X))).toEqual([[4, 12], [5, 12], [6, 5], [6, 12], [7, 5]])
+    // Outlined as drawn: on the X cells in schematic, on the covered cells (one row lower) in simulation.
+    expect(cellsOf(conflictOutline('schematic', conflicts(X)))).toEqual([[4, 12], [5, 12], [6, 5], [6, 12], [7, 5]])
+    expect(cellsOf(conflictOutline('simulation', conflicts(X)))).toEqual([[3, 12], [4, 12], [5, 5], [5, 12], [6, 5]])
     // (15, 10) is the top row: no dc, and the new app refuses the toggle outright (§4).
     expect(at(delta, 15, 10)).toBe(false)
   })

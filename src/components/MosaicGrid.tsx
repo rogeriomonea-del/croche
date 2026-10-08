@@ -1,5 +1,5 @@
 import type { MouseEvent } from 'react'
-import { at, cellYarn, resolveClick, stitchNumber, stripe, YARN_LABEL, type Matrix, type View, type Yarn } from '../core'
+import { at, cellYarn, conflictOutline, resolveClick, stitchNumber, stripe, YARN_LABEL, type Matrix, type View, type Yarn } from '../core'
 
 const CELL = 22
 const DRIVER = 64
@@ -26,9 +26,7 @@ export function MosaicGrid({ view, delta, X, conflictX, colors, onCellClick }: M
   const rowList = Array.from({ length: rows }, (_, i) => rows - i)
   const colList = Array.from({ length: cols }, (_, j) => j + 1)
 
-  // A conflict belongs to the dc (X) cells. In simulation the user sees the cells those dc cover,
-  // one row lower, so the outline moves down with them.
-  const inConflict = (r: number, c: number) => (view === 'schematic' ? at(conflictX, r, c) : at(conflictX, r + 1, c))
+  const outline = conflictOutline(view, conflictX)
 
   const handleClick = (e: MouseEvent<SVGSVGElement>) => {
     const cell = (e.target as Element).closest('[data-r]')
@@ -108,7 +106,7 @@ export function MosaicGrid({ view, delta, X, conflictX, colors, onCellClick }: M
 
       {rowList.flatMap((r) =>
         colList
-          .filter((c) => inConflict(r, c))
+          .filter((c) => at(outline, r, c))
           .map((c) => (
             <rect
               key={`${r}-${c}`}
