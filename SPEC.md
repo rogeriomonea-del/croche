@@ -93,8 +93,9 @@ RFC 4180 puro (sem linha `sep=`).
 ### 9.3 Segurança HTTP
 - Requisição com corpo exige `Content-Type: application/json` (senão 415). Corpo ≤ 256 KiB.
 - POST/PUT/PATCH/DELETE com cabeçalho `Origin` diferente de `PUBLIC_ORIGIN` → `403 bad_origin`.
-- Rate limit: 300 req/min por IP em `/api`; login e cadastro 10/min por IP; 10 falhas de login por
-  e-mail em 15 min bloqueiam aquele e-mail até a janela fechar (`429 rate_limited`).
+- Rate limit: 300 req/min por IP em `/api`; login, cadastro, troca de senha e exclusão de conta
+  10/min por IP; 10 senhas erradas por e-mail em 15 min (somando login, troca de senha e exclusão de
+  conta) bloqueiam aquele e-mail até a janela fechar (`429 rate_limited`).
 - Helmet com CSP `default-src 'self'` (sem `unsafe-inline`), `frame-ancestors 'none'`.
 - Log sem corpo de requisição; cookies e `set-cookie` redigidos.
 - Padrão de outro usuário responde `404`, nunca `403`. IDs são UUID v4.
@@ -110,8 +111,8 @@ Erro: `{ "error": { "code", "message", "details"? } }`. Datas em ISO 8601.
 | `POST /auth/login` | `{email,password}` | `200 {user}` + cookie | 400, 401 `invalid_credentials`, 429 |
 | `POST /auth/logout` | | `204` | |
 | `GET /auth/me` | | `200 {user}` | 401 `unauthenticated` |
-| `POST /auth/password` | `{currentPassword,newPassword}` | `204` | 400, 401 |
-| `POST /auth/delete-account` | `{password}` | `204` | 401 |
+| `POST /auth/password` | `{currentPassword,newPassword}` | `204` | 400, 401, 429 |
+| `POST /auth/delete-account` | `{password}` | `204` | 401, 429 |
 | `GET /patterns` | | `200 {patterns: PatternSummary[]}` (mais recente primeiro) | 401 |
 | `POST /patterns` | `{document}` | `201 {pattern}` | 400 `invalid_document`, 403 `pattern_quota_exceeded` |
 | `GET /patterns/:id` | | `200 {pattern}` | 404 `not_found` |

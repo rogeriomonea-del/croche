@@ -18,7 +18,7 @@ import { getDummyHash, hashPassword, verifyPassword } from './passwords'
 import { createSession, deleteSession, deleteUserSessions, hashToken } from './sessions'
 import { deleteUser, EmailTakenError, findUserByEmail, findUserById, insertUser, toUser, updatePasswordHash } from './users'
 
-// SPEC §9.3: 10 per minute per IP on the endpoints that take a password from an anonymous client.
+// SPEC §9.3: 10 per minute per IP on every endpoint that checks a password.
 const AUTH_RATE_LIMIT = { max: 10, timeWindow: 60_000 }
 
 function bodySchema<K extends string>(...keys: K[]) {
@@ -46,6 +46,25 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   function startSession(reply: FastifyReply, userId: string) {
     const { token } = createSession(db, userId, now(), ttl)
     setSessionCookie(reply, config, token)
+  }
+
+  // Wrong passwords count against the e-mail wherever they are typed, so a borrowed session cannot
+  // guess the password any faster than a login form can.
+  function assertNotLocked(reply: FastifyReply, email: string) {
+    const lockedMs = loginThrottle.lockedFor(email, now())
+    if (lockedMs > 0) {
+      reply.header('retry-after', Math.ceil(lockedMs / 1000))
+      throw new ApiError(429, 'rate_limited', 'Too many wrong passwords for this account; try again later')
+    }
+  }
+
+  async function checkSessionPassword(reply: FastifyReply, user: User, password: string): Promise<boolean> {
+    assertNotLocked(reply, user.email)
+    const row = findUserById(db, user.id)
+    const ok = row !== undefined && (await verifyPassword(row.password_hash, password))
+    if (ok) loginThrottle.reset(user.email)
+    else loginThrottle.recordFailure(user.email, now())
+    return ok
   }
 
   app.get('/api/auth/config', async (): Promise<AuthConfig> => ({ signupEnabled: config.allowSignup }))
@@ -99,11 +118,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       if (passwordProblem) fields.password = passwordProblem
       if (emailProblem || passwordProblem) throw invalidInput(fields)
 
-      const lockedMs = loginThrottle.lockedFor(email, now())
-      if (lockedMs > 0) {
-        reply.header('retry-after', Math.ceil(lockedMs / 1000))
-        throw new ApiError(429, 'rate_limited', 'Too many failed sign-in attempts for this account; try again later')
-      }
+      assertNotLocked(reply, email)
 
       const user = findUserByEmail(db, email)
       let ok = false
@@ -137,7 +152,11 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.post<{ Body: ChangePasswordRequest }>(
     '/api/auth/password',
-    { schema: { body: bodySchema('currentPassword', 'newPassword') }, preHandler: app.requireUser },
+    {
+      schema: { body: bodySchema('currentPassword', 'newPassword') },
+      config: { rateLimit: AUTH_RATE_LIMIT },
+      preHandler: app.requireUser,
+    },
     async (request, reply) => {
       const user = currentUser(request)
       const { currentPassword, newPassword } = request.body
@@ -148,8 +167,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       if (newProblem) fields.newPassword = newProblem
       if (currentProblem || newProblem) throw invalidInput(fields)
 
-      const row = findUserById(db, user.id)
-      if (!row || !(await verifyPassword(row.password_hash, currentPassword))) {
+      if (!(await checkSessionPassword(reply, user, currentPassword))) {
         throw new ApiError(401, 'invalid_credentials', 'Current password is incorrect')
       }
       const passwordHash = await hashPassword(newPassword)
@@ -164,13 +182,12 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.post<{ Body: DeleteAccountRequest }>(
     '/api/auth/delete-account',
-    { schema: { body: bodySchema('password') }, preHandler: app.requireUser },
+    { schema: { body: bodySchema('password') }, config: { rateLimit: AUTH_RATE_LIMIT }, preHandler: app.requireUser },
     async (request, reply) => {
       const user = currentUser(request)
       const passwordProblem = loginPasswordError(request.body.password)
       if (passwordProblem) throw invalidInput({ password: passwordProblem })
-      const row = findUserById(db, user.id)
-      if (!row || !(await verifyPassword(row.password_hash, request.body.password))) {
+      if (!(await checkSessionPassword(reply, user, request.body.password))) {
         throw new ApiError(401, 'invalid_credentials', 'Password is incorrect')
       }
       // Sessions and patterns follow through ON DELETE CASCADE.

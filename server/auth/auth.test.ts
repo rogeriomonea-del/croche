@@ -278,6 +278,29 @@ describe('POST /api/auth/password', () => {
     expect(weak.json().error.details.fields).toEqual({ newPassword: expect.stringMatching(/at least 10/) })
   })
 
+  it('locks the e-mail after 10 wrong current passwords, for this route and login alike', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await signup('ro@example.com', PASSWORD, '10.0.0.1'))
+    const change = (currentPassword: string, i: number) =>
+      postJson(t.app, '/api/auth/password', { currentPassword, newPassword: 'a whole new passphrase' }, { cookie, remoteAddress: `10.1.0.${i}` })
+    for (let i = 0; i < 10; i++) expect((await change('not my password', i)).statusCode).toBe(401)
+    const locked = await change(PASSWORD, 100)
+    expect(locked.statusCode).toBe(429)
+    expect(locked.json().error.code).toBe('rate_limited')
+    expect(Number(locked.headers['retry-after'])).toBe(15 * 60)
+    expect((await login('ro@example.com', PASSWORD, '10.0.0.2')).statusCode).toBe(429)
+    t.clock.advance(15 * 60 * 1000)
+    expect((await change(PASSWORD, 101)).statusCode).toBe(204)
+  })
+
+  it('allows 10 calls a minute per IP', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await signup('ro@example.com', PASSWORD, '10.0.0.1'))
+    const change = () => postJson(t.app, '/api/auth/password', { currentPassword: PASSWORD, newPassword: 'short' }, { cookie, remoteAddress: '10.2.0.1' })
+    for (let i = 0; i < 10; i++) expect((await change()).statusCode).toBe(400)
+    expect((await change()).statusCode).toBe(429)
+  })
+
   it('is 401 unauthenticated without a session', async () => {
     t = await makeApp()
     const res = await postJson(t.app, '/api/auth/password', { currentPassword: PASSWORD, newPassword: 'a whole new passphrase' })
@@ -287,6 +310,25 @@ describe('POST /api/auth/password', () => {
 })
 
 describe('POST /api/auth/delete-account', () => {
+  it('locks the e-mail after 10 wrong passwords and keeps the account', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await signup('ro@example.com', PASSWORD, '10.0.0.1'))
+    const remove = (password: string, i: number) => postJson(t.app, '/api/auth/delete-account', { password }, { cookie, remoteAddress: `10.3.0.${i}` })
+    for (let i = 0; i < 10; i++) expect((await remove('not my password', i)).statusCode).toBe(401)
+    const locked = await remove(PASSWORD, 100)
+    expect(locked.statusCode).toBe(429)
+    expect(locked.json().error.code).toBe('rate_limited')
+    expect((await get(t.app, '/api/auth/me', cookie)).statusCode).toBe(200)
+  })
+
+  it('allows 10 calls a minute per IP', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await signup('ro@example.com', PASSWORD, '10.0.0.1'))
+    const remove = () => postJson(t.app, '/api/auth/delete-account', { password: '' }, { cookie, remoteAddress: '10.4.0.1' })
+    for (let i = 0; i < 10; i++) expect((await remove()).statusCode).toBe(400)
+    expect((await remove()).statusCode).toBe(429)
+  })
+
   it('deletes the user and, by cascade, their sessions and patterns', async () => {
     t = await makeApp({ allowSignup: true })
     const created = await signup('ro@example.com', PASSWORD, '10.0.0.1')
