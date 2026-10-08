@@ -347,7 +347,8 @@ corrigir. Vazio (`NOME=`) vale o padrão.
 
 ## 10. Solução de problemas
 
-Logs: `docker compose logs -f app` (A) ou `journalctl -u mosaic-crochet -f` (B).
+Logs: `docker compose logs -f app` (A) ou `journalctl -u mosaic-crochet -f` (B). No caminho A, o
+compose guarda até 30 MB de log por container (3 arquivos de 10 MB) e descarta o mais antigo.
 
 | Sintoma | Causa provável e solução |
 |---|---|
