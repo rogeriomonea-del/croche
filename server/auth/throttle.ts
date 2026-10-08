@@ -18,7 +18,7 @@ export class LoginThrottle {
   readonly maxFailures: number
   readonly windowMs: number
   readonly maxEntries: number
-  // Insertion order = window start order, which makes the first key the oldest.
+  // Insertion order = window start order, so the first of equals is the oldest.
   private readonly entries = new Map<string, Entry>()
 
   constructor({ maxFailures = 10, windowMs = 15 * 60 * 1000, maxEntries = 10_000 }: LoginThrottleOptions = {}) {
@@ -41,7 +41,7 @@ export class LoginThrottle {
       return
     }
     if (this.entries.size >= this.maxEntries) this.sweep(now)
-    if (this.entries.size >= this.maxEntries) this.entries.delete(this.entries.keys().next().value!)
+    if (this.entries.size >= this.maxEntries && !this.evictLeastFailed()) return
     this.entries.set(email, { windowStart: now, failures: 1 })
   }
 
@@ -58,6 +58,25 @@ export class LoginThrottle {
 
   get size(): number {
     return this.entries.size
+  }
+
+  /**
+   * Makes room by dropping the entry with the fewest failures (the oldest among equals), so a spray
+   * of one-off addresses cannot push out the count of an account under attack. A locked entry is
+   * never dropped: when every entry is locked the new address goes untracked instead.
+   */
+  private evictLeastFailed(): boolean {
+    let victim: string | undefined
+    let fewest = this.maxFailures
+    for (const [email, entry] of this.entries) {
+      if (entry.failures < fewest) {
+        victim = email
+        fewest = entry.failures
+      }
+    }
+    if (victim === undefined) return false
+    this.entries.delete(victim)
+    return true
   }
 
   private live(email: string, now: number): Entry | undefined {
