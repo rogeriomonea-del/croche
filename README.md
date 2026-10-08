@@ -20,7 +20,7 @@ npm run cli:dev -- user:create voce@exemplo.com   # primeira conta (o cadastro p
 ```sh
 npm test             # Vitest: núcleo em src/core (golden tests da SPEC §5) e backend
 npm run build        # SPA em dist/ + backend em dist-server/
-npm start            # roda o build (configuração por variáveis de ambiente: .env.example)
+PUBLIC_ORIGIN=http://127.0.0.1:3000 npm start   # roda o build; sem PUBLIC_ORIGIN o login dá 403 bad_origin (variáveis: .env.example)
 ```
 
 Produção (Docker Compose + Caddy, ou Node + systemd + nginx), backups e atualizações:
