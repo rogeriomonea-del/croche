@@ -1,0 +1,41 @@
+# Mosaic Crochet sem Docker (caminho B em docs/DEPLOY.md).
+# Instalação: sudo cp deploy/mosaic-crochet.service /etc/systemd/system/
+#             sudo systemctl daemon-reload && sudo systemctl enable --now mosaic-crochet
+[Unit]
+Description=Mosaic Crochet (API + SPA)
+After=network.target
+
+[Service]
+Type=simple
+User=mosaic
+Group=mosaic
+WorkingDirectory=/opt/mosaic-crochet
+EnvironmentFile=/etc/mosaic-crochet.env
+ExecStart=/usr/bin/node dist-server/main.js
+Restart=on-failure
+RestartSec=5
+# main.js fecha as conexões e o banco ao receber SIGTERM; 10 s de folga são suficientes.
+TimeoutStopSec=15
+
+# Cria /var/lib/mosaic-crochet com dono mosaic (DATABASE_PATH=/var/lib/mosaic-crochet/mosaic.db).
+StateDirectory=mosaic-crochet
+StateDirectoryMode=0750
+
+# Endurecimento: o processo só escreve no diretório de dados.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mosaic-crochet
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

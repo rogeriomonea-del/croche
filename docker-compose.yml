@@ -1,0 +1,33 @@
+# Uso: docs/DEPLOY.md (caminho A). Só o app: `docker compose up -d --build`.
+# Com HTTPS automático pelo Caddy: `docker compose --profile caddy up -d --build`.
+services:
+  app:
+    build: .
+    image: mosaic-crochet:latest
+    env_file: .env
+    volumes:
+      # Banco SQLite e backups ficam em ./data no host (dono: uid 1000, o usuário 'node' da imagem).
+      - ./data:/data
+    ports:
+      # Só a própria máquina alcança o app; o acesso público passa pelo Caddy ou pelo nginx.
+      - '127.0.0.1:3000:3000'
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    profiles: ['caddy']
+    depends_on:
+      - app
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
