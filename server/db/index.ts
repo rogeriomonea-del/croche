@@ -16,9 +16,10 @@ export function openDatabase(path: string, { migrate: runMigrations = true }: Op
   if (!inMemory) mkdirSync(dirname(path), { recursive: true })
   const db = new BetterSqlite3(path)
   try {
+    // First, so switching to WAL waits for a lock held by another process instead of failing.
+    db.pragma('busy_timeout = 5000')
     if (!inMemory) db.pragma('journal_mode = WAL')
     db.pragma('foreign_keys = ON')
-    db.pragma('busy_timeout = 5000')
     if (runMigrations) migrate(db)
   } catch (err) {
     db.close()
