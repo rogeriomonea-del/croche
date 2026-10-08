@@ -48,6 +48,7 @@ export interface PostOptions {
   cookie?: string
   remoteAddress?: string
   origin?: string
+  forwardedFor?: string
 }
 
 export function postJson(app: FastifyInstance, url: string, body: unknown, opts: PostOptions = {}) {
@@ -59,6 +60,7 @@ export function postJson(app: FastifyInstance, url: string, body: unknown, opts:
       'content-type': 'application/json',
       ...(opts.origin ? { origin: opts.origin } : {}),
       ...(opts.cookie ? { cookie: opts.cookie } : {}),
+      ...(opts.forwardedFor ? { 'x-forwarded-for': opts.forwardedFor } : {}),
     },
     remoteAddress: opts.remoteAddress,
   })

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
-import { deriveX, DOCUMENT_FORMAT, emptyMatrix, fromDocument, toCsv, toDocument, toggle, type PatternDocument } from '../../src/core'
+import { deriveX, DOCUMENT_FORMAT, emptyMatrix, fromDocument, MAX_COLS, MAX_ROWS, toCsv, toDocument, toggle, type PatternDocument } from '../../src/core'
 import type { Pattern } from '../../src/shared/api'
 import { get, makeApp, PASSWORD, postJson, sessionCookie, T0, type TestApp } from '../test/helpers'
 import { createPattern } from './repository'
@@ -156,6 +156,14 @@ describe('pattern CRUD', () => {
     const updated = await send(t.app, 'PUT', `/api/patterns/${created.id}`, { revision: 1, document: { ...sent, extra: true } }, ro.cookie)
     expect(updated.json().pattern.document).toEqual(canonical)
     expect(JSON.parse(storedRows()[0].document as string)).toEqual(canonical)
+  })
+
+  it('saves and reads back a pattern of the largest size', async () => {
+    const { ro } = await start()
+    const document = blank(MAX_ROWS, MAX_COLS, 'Grande')
+    const created = await create(ro.cookie, document)
+    expect(created).toMatchObject({ rows: MAX_ROWS, cols: MAX_COLS, document })
+    expect((await get(t.app, `/api/patterns/${created.id}`, ro.cookie)).json()).toEqual({ pattern: created })
   })
 })
 

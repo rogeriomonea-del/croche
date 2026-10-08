@@ -1,6 +1,8 @@
 import { connect, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
+import { emptyMatrix, toDocument } from '../../src/core'
 import { createUser } from '../admin'
+import { BODY_LIMIT } from '../app'
 import { get, makeApp, ORIGIN, PASSWORD, postJson, sessionCookie, type TestApp } from '../test/helpers'
 
 let t: TestApp
@@ -32,6 +34,38 @@ describe('Origin check (SPEC §9.3)', () => {
       const other = await t.app.inject({ method, url: '/api/anything', headers: { origin: 'null' } })
       expect(other.json().error.code).toBe('bad_origin')
     }
+  })
+
+  it('rejects near-miss origins on every state-changing method and leaves the pattern alone', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await postJson(t.app, '/api/auth/signup', { email: 'ro@example.com', password: PASSWORD }))
+    const document = toDocument({ name: 'Kept', delta: emptyMatrix(15, 20), colors: { main: '#ffffff', pattern: '#000000' } })
+    const created = await postJson(t.app, '/api/patterns', { document }, { cookie, origin: ORIGIN })
+    expect(created.statusCode).toBe(201)
+    const url = `/api/patterns/${created.json().pattern.id}`
+    const before = (await get(t.app, url, cookie)).json()
+
+    const renamed = { ...document, name: 'Changed' }
+    const nearMisses = [`${ORIGIN}.evil.example`, `${ORIGIN}/`, 'http://localhost:51730', 'https://localhost:5173', 'HTTP://LOCALHOST:5173']
+    for (const origin of nearMisses) {
+      const requests = [
+        { method: 'POST', url: '/api/patterns', body: { document: renamed } },
+        { method: 'PUT', url, body: { revision: 1, document: renamed } },
+        { method: 'DELETE', url },
+      ] as const
+      for (const { method, url: target, ...rest } of requests) {
+        const res = await t.app.inject({
+          method,
+          url: target,
+          headers: { origin, cookie, ...('body' in rest ? { 'content-type': 'application/json' } : {}) },
+          payload: 'body' in rest ? JSON.stringify(rest.body) : undefined,
+        })
+        expect(res.statusCode, `${method} ${origin}`).toBe(403)
+        expect(res.json().error.code).toBe('bad_origin')
+      }
+    }
+    expect((await get(t.app, url, cookie)).json()).toEqual(before)
+    expect((await get(t.app, '/api/patterns', cookie)).json().patterns).toHaveLength(1)
   })
 
   it('lets the configured origin and requests without Origin through', async () => {
@@ -72,6 +106,25 @@ describe('request bodies', () => {
     const res = await postJson(t.app, LOGIN, { email: 'ro@example.com', password: 'x'.repeat(300 * 1024) })
     expect(res.statusCode).toBe(413)
     expect(res.json().error.code).toBe('payload_too_large')
+  })
+
+  it('accepts a body of exactly 256 KiB and rejects one byte more', async () => {
+    t = await makeApp()
+    const bodyOf = (size: number) => {
+      const shell = JSON.stringify({ email: 'ro@example.com', password: '' })
+      return shell.replace('""}', `"${'x'.repeat(size - shell.length)}"}`)
+    }
+    const send = (payload: string) => t.app.inject({ method: 'POST', url: LOGIN, headers: { 'content-type': 'application/json' }, payload })
+    expect(BODY_LIMIT).toBe(256 * 1024)
+    const atLimit = bodyOf(256 * 1024)
+    expect(Buffer.byteLength(atLimit)).toBe(256 * 1024)
+    // Through the body limit, so only the 256-character password rule turns it away.
+    const accepted = await send(atLimit)
+    expect(accepted.statusCode).toBe(400)
+    expect(accepted.json().error.code).toBe('invalid_input')
+    const over = await send(bodyOf(256 * 1024 + 1))
+    expect(over.statusCode).toBe(413)
+    expect(over.json().error.code).toBe('payload_too_large')
   })
 
   it('is 400 invalid_input for malformed JSON', async () => {
@@ -138,6 +191,21 @@ describe('rate limits (SPEC §9.3)', () => {
     expect((await t.app.inject({ method: 'GET', url: '/%61pi/nope', remoteAddress: '203.0.113.21' })).statusCode).toBe(429)
   })
 
+  it('limits per client behind a TRUST_PROXY=1 reverse proxy, keyed on the address the proxy saw', async () => {
+    t = await makeApp({ trustProxy: 1 })
+    const viaProxy = (email: string, forwardedFor: string) =>
+      postJson(t.app, LOGIN, { email, password: PASSWORD }, { remoteAddress: '127.0.0.1', forwardedFor })
+    for (let i = 0; i < 10; i++) expect((await viaProxy(`user${i}@example.com`, '203.0.113.7')).statusCode).toBe(401)
+    expect((await viaProxy('user10@example.com', '203.0.113.7')).statusCode).toBe(429)
+    // Every visitor arrives from the proxy's address; another client still has its own bucket.
+    expect((await viaProxy('user11@example.com', '203.0.113.8')).statusCode).toBe(401)
+
+    // The proxy appends the peer it saw; whatever the client put to the left of it is not trusted.
+    const statuses: number[] = []
+    for (let i = 0; i < 11; i++) statuses.push((await viaProxy(`spoof${i}@example.com`, `10.9.9.${i}, 203.0.113.50`)).statusCode)
+    expect(statuses).toEqual([...Array(10).fill(401), 429])
+  })
+
   it('counts absolute-form request targets as /api requests', async () => {
     t = await makeApp()
     await t.app.listen({ host: '127.0.0.1', port: 0 })
@@ -160,11 +228,13 @@ describe('rate limits (SPEC §9.3)', () => {
   it('locks an e-mail after 10 failures in 15 minutes, from any IP, even with the right password', async () => {
     t = await makeApp()
     await createUser(t.db, 'ro@example.com', PASSWORD)
+    // Spelling the address differently each time must still count against the one account.
+    const spellings = [' RO@example.com', 'Ro@Example.com', 'ro@EXAMPLE.com ', 'rO@example.COM', '  ro@example.com', 'RO@EXAMPLE.COM', 'ro@example.com', 'Ro@example.com\t', 'ro@Example.Com', 'RO@example.com ']
     for (let i = 0; i < 10; i++) {
-      const res = await postJson(t.app, LOGIN, { email: 'ro@example.com', password: 'wrong password' }, { remoteAddress: `192.0.2.${i + 1}` })
+      const res = await postJson(t.app, LOGIN, { email: spellings[i], password: 'wrong password' }, { remoteAddress: `192.0.2.${i + 1}` })
       expect(res.statusCode).toBe(401)
     }
-    const locked = await postJson(t.app, LOGIN, { email: 'RO@example.com', password: PASSWORD }, { remoteAddress: '192.0.2.100' })
+    const locked = await postJson(t.app, LOGIN, { email: 'ro@example.com', password: PASSWORD }, { remoteAddress: '192.0.2.100' })
     expect(locked.statusCode).toBe(429)
     expect(locked.json().error.code).toBe('rate_limited')
     expect(Number(locked.headers['retry-after'])).toBe(15 * 60)
