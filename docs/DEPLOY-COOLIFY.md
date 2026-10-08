@@ -76,6 +76,19 @@ Cada **Deploy**/**Redeploy** no Coolify baixa o branch, reconstrói a imagem e t
 As migrações do banco rodam sozinhas na subida; os dados ficam no volume `/data`. Para deploy
 automático a cada push, ative **Auto Deploy** (precisa do webhook do GitHub configurado no Coolify).
 
+**Antes de cada Deploy, faça um backup** pelo terminal do container que está rodando:
+
+```sh
+node dist-server/cli.js db:backup /data/antes-de-atualizar-$(date +%F-%H%M).db
+```
+
+Se o deploy trouxer uma migração (por exemplo, a que acrescenta os nomes de login), o banco passa
+para o formato novo na subida. Um **Rollback** para a imagem anterior depois disso não sobe: o app
+antigo se recusa a abrir um banco mais novo (`Database schema version N is newer than this build
+supports`) e o container reinicia em loop. Para voltar de versão, é preciso restaurar esse backup
+([DEPLOY.md, seção 6](DEPLOY.md#6-backups)), o que perde o que foi salvo depois dele. Com
+**Auto Deploy** ligado, faça o backup antes do push.
+
 ## 4. Backups
 
 - O VPS tem o backup semanal da Hostinger (hPanel → VPS → Backups).
