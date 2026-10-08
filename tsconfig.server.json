@@ -1,0 +1,19 @@
+{
+  // The backend (Node 22, no DOM) plus the pure modules it shares with the SPA.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["server", "src/core", "src/shared"],
+  "exclude": ["src/**/*.test.ts"]
+}
