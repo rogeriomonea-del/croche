@@ -20,6 +20,7 @@ interface ToolbarProps {
   onResize: (rows: number, cols: number) => void
   colors: Record<Yarn, string>
   onColorChange: (yarn: Yarn, color: string) => void
+  onApplyPalette: (colors: Record<Yarn, string>) => void
   onSwapColors: () => void
   onClear: () => void
   onDownloadCsv: () => void
@@ -38,7 +39,7 @@ const palettes = [
 const spring = { type: 'spring' as const, stiffness: 300, damping: 30 }
 
 export function Toolbar(props: ToolbarProps) {
-  const { rows, cols, onResize, colors, onColorChange } = props
+  const { rows, cols, onResize, colors, onColorChange, onApplyPalette } = props
   const fileInput = useRef<HTMLInputElement>(null)
   const [activeYarn, setActiveYarn] = useState<Yarn>('pattern')
   // Descriptive labels are session-only studio notes: the versioned document remains unchanged.
@@ -49,8 +50,7 @@ export function Toolbar(props: ToolbarProps) {
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   const applyPalette = (palette: (typeof palettes)[number]) => {
-    onColorChange('main', palette.colors[0])
-    onColorChange('pattern', palette.colors[1])
+    onApplyPalette({ main: palette.colors[0], pattern: palette.colors[1] })
     setNames({ main: palette.names[0], pattern: palette.names[1] })
     setPaletteOpen(false)
   }

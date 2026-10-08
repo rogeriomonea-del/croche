@@ -20,6 +20,7 @@ export type DesignAction =
   | { type: 'paint'; cells: { r: number; c: number }[]; value: PaintValue }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'setColor'; yarn: Yarn; color: string }
+  | { type: 'setPalette'; colors: Record<Yarn, string> }
   | { type: 'swapColors' }
   | { type: 'clear' }
   | { type: 'load'; design: DesignData }
@@ -53,6 +54,8 @@ export function designReducer(state: Design, action: DesignAction): Design {
       return { ...state, delta: resize(state.delta, action.rows, action.cols) }
     case 'setColor':
       return { ...state, colors: { ...state.colors, [action.yarn]: action.color } }
+    case 'setPalette':
+      return { ...state, colors: { ...action.colors } }
     case 'swapColors':
       return { ...state, colors: { main: state.colors.pattern, pattern: state.colors.main } }
     case 'clear':

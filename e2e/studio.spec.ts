@@ -250,6 +250,10 @@ test('imports, palettes and resizing preserve the boolean drawing model', async 
   const recolored = await exportDocument(page)
   expect(recolored.cells).toEqual(imported.cells)
   expect(recolored.colors).toEqual({ A: '#f1ddca', B: '#a85943' })
+  // A palette is one undo step: both yarns go back together.
+  await page.getByRole('button', { name: /^Desfazer/i }).click()
+  expect((await exportDocument(page)).colors).toEqual(imported.colors)
+  await page.getByRole('button', { name: /^Refazer/i }).click()
   await page.getByRole('combobox', { name: 'Carreiras', exact: true }).selectOption('17')
   await page.getByRole('combobox', { name: 'Pontos', exact: true }).selectOption('25')
   const resized = await exportDocument(page)

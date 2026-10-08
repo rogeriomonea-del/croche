@@ -645,6 +645,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
             }}
             colors={design.colors}
             onColorChange={(yarn, color) => dispatch({ type: 'setColor', yarn, color })}
+            onApplyPalette={(colors) => dispatch({ type: 'setPalette', colors })}
             onSwapColors={() => dispatch({ type: 'swapColors' })}
             onClear={handleClear}
             onDownloadCsv={() => download(`${fileSlug(design.name)}.csv`, toCsv(X), 'text/csv;charset=utf-8')}
