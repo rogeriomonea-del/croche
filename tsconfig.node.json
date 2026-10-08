@@ -1,6 +1,5 @@
 {
-  // The SPA: browser code only. Tests and vite.config.ts pull in Node types through vitest/vite,
-  // so they are checked by tsconfig.node.json instead; the server has tsconfig.server.json.
+  // Code that runs in Node during development: vite.config.ts and the SPA's tests (vitest).
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -11,12 +10,10 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": false,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "types": ["vite/client"],
+    "types": ["node", "vite/client"],
     "noEmit": true
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+  "include": ["vite.config.ts", "src/**/*.test.ts", "src/**/*.test.tsx"]
 }
