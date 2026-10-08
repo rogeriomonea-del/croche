@@ -1,11 +1,14 @@
 # Mosaic Crochet: one process serves the API (/api) and the built SPA (SPEC §9.1).
 # glibc base so the prebuilt better-sqlite3 and @node-rs/argon2 binaries load without a compiler.
+# --ignore-scripts: better-sqlite3 ships prebuilds/ but npm would still run node-gyp, which needs
+# Python and a compiler that the slim image lacks. Native binaries come from prebuilds and from the
+# platform-specific optional dependencies (esbuild, rolldown, tailwind, argon2), none needing scripts.
 
 # --- build: compile the SPA (dist/) and bundle the server (dist-server/) ---
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build
 
@@ -18,7 +21,7 @@ ENV NODE_ENV=production \
     STATIC_DIR=/app/dist
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # App files stay root-owned: the process can read them but not change them.
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
