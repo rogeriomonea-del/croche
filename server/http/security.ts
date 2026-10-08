@@ -1,5 +1,5 @@
 import helmet from '@fastify/helmet'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Config } from '../config'
 import { ApiError } from './errors'
 
@@ -7,6 +7,34 @@ const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 export function isApiPath(url: string): boolean {
   return url === '/api' || url.startsWith('/api/') || url.startsWith('/api?')
+}
+
+/**
+ * Whether the router treats the request as /api. The raw URL is not enough: the router decodes
+ * `/%61pi/...` and accepts absolute-form `http://host/api/...`, so both reach /api handlers while
+ * `request.url` does not start with /api. A matched route answers by its own pattern; an unmatched
+ * one by its path decoded the same way.
+ */
+export function isApiRequest(request: FastifyRequest): boolean {
+  return isApiPath(request.routeOptions.url ?? routedPath(request.url))
+}
+
+function routedPath(url: string): string {
+  let path = url
+  if (!path.startsWith('/')) {
+    try {
+      path = new URL(path).pathname
+    } catch {
+      return url
+    }
+  }
+  const end = path.search(/[?#]/)
+  if (end !== -1) path = path.slice(0, end)
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    return path
+  }
 }
 
 /** SPEC §9.3 headers, Origin check and body content type. */
@@ -39,6 +67,6 @@ export async function registerSecurity(app: FastifyInstance, config: Config) {
       throw new ApiError(403, 'bad_origin', 'Request origin is not allowed')
     }
     // Responses carry account data; no cache in between should keep a copy.
-    if (isApiPath(request.url)) reply.header('cache-control', 'no-store')
+    if (isApiRequest(request)) reply.header('cache-control', 'no-store')
   })
 }

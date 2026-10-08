@@ -11,7 +11,7 @@ import type { AppContext } from './context'
 import type { Database } from './db'
 import { ApiError, registerErrorHandler } from './http/errors'
 import { registerJsonOnly } from './http/json'
-import { isApiPath, registerSecurity } from './http/security'
+import { isApiRequest, registerSecurity } from './http/security'
 import { registerStatic } from './http/static'
 import { registerPatternRoutes } from './patterns/routes'
 
@@ -65,7 +65,7 @@ export async function buildApp({ config, db, now = Date.now }: BuildAppOptions):
     max: 300,
     timeWindow: 60_000,
     // SPEC §9.3 limits /api; the SPA's files are cheap and cached.
-    allowList: (request) => !isApiPath(request.url),
+    allowList: (request) => !isApiRequest(request),
     errorResponseBuilder: () => new ApiError(429, 'rate_limited', 'Too many requests; try again later'),
   })
   await registerSecurity(app, config)

@@ -1,3 +1,4 @@
+import { connect, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createUser } from '../admin'
 import { get, makeApp, ORIGIN, PASSWORD, postJson, sessionCookie, type TestApp } from '../test/helpers'
@@ -8,6 +9,18 @@ afterEach(async () => {
 })
 
 const LOGIN = '/api/auth/login'
+
+/** Sends `request` as written (inject cannot send an absolute-form target); resolves to the status code. */
+function rawStatus(port: number, request: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => socket.write(request))
+    let response = ''
+    socket.setEncoding('utf8')
+    socket.on('data', (chunk) => (response += chunk))
+    socket.on('end', () => resolve(Number(response.split(' ')[1])))
+    socket.on('error', reject)
+  })
+}
 
 describe('Origin check (SPEC §9.3)', () => {
   it('rejects a state-changing request from another origin with 403 bad_origin', async () => {
@@ -110,6 +123,40 @@ describe('rate limits (SPEC §9.3)', () => {
     expect(unknownRoute.statusCode).toBe(429)
   })
 
+  it('counts /api requests the router reaches through a percent-encoded path', async () => {
+    t = await makeApp()
+    // The router decodes /%61pi to /api; the limits must follow the route, not the raw URL.
+    for (let i = 0; i < 10; i++) {
+      const res = await postJson(t.app, '/%61pi/auth/login', { email: `user${i}@example.com`, password: PASSWORD }, { remoteAddress: '203.0.113.20' })
+      expect(res.statusCode).toBe(401)
+    }
+    const blocked = await postJson(t.app, '/%61pi/auth/login', { email: 'user10@example.com', password: PASSWORD }, { remoteAddress: '203.0.113.20' })
+    expect(blocked.statusCode).toBe(429)
+
+    for (let i = 0; i < 300; i++) await t.app.inject({ method: 'GET', url: '/%61pi/health', remoteAddress: '203.0.113.21' })
+    expect((await t.app.inject({ method: 'GET', url: '/%61pi/health', remoteAddress: '203.0.113.21' })).statusCode).toBe(429)
+    expect((await t.app.inject({ method: 'GET', url: '/%61pi/nope', remoteAddress: '203.0.113.21' })).statusCode).toBe(429)
+  })
+
+  it('counts absolute-form request targets as /api requests', async () => {
+    t = await makeApp()
+    await t.app.listen({ host: '127.0.0.1', port: 0 })
+    const { port } = t.app.server.address() as AddressInfo
+    const statuses: number[] = []
+    for (let i = 0; i < 11; i++) {
+      const body = JSON.stringify({ email: `user${i}@example.com`, password: PASSWORD })
+      const head = [
+        'POST http://evil.example/api/auth/login HTTP/1.1',
+        'Host: evil.example',
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(body)}`,
+        'Connection: close',
+      ]
+      statuses.push(await rawStatus(port, `${head.join('\r\n')}\r\n\r\n${body}`))
+    }
+    expect(statuses).toEqual([...Array(10).fill(401), 429])
+  })
+
   it('locks an e-mail after 10 failures in 15 minutes, from any IP, even with the right password', async () => {
     t = await makeApp()
     await createUser(t.db, 'ro@example.com', PASSWORD)
@@ -184,6 +231,14 @@ describe('error envelope and headers', () => {
     expect(csp).not.toContain('unsafe-inline')
     expect(res.headers['x-content-type-options']).toBe('nosniff')
     expect(res.headers['strict-transport-security']).toBeUndefined()
+  })
+
+  it('marks /api responses no-store however the path is spelled', async () => {
+    t = await makeApp({ allowSignup: true })
+    const cookie = sessionCookie(await postJson(t.app, '/api/auth/signup', { email: 'ro@example.com', password: PASSWORD }))
+    for (const url of ['/api/auth/me', '/%61pi/auth/me', '/%61pi/nope']) {
+      expect((await get(t.app, url, cookie)).headers['cache-control'], url).toBe('no-store')
+    }
   })
 
   it('sends HSTS only with COOKIE_SECURE', async () => {
