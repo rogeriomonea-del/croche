@@ -1,7 +1,8 @@
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { ChevronDown, FolderOpen, Library, LoaderCircle, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { formatUpdated } from '../lib/format'
 import type { PatternSummary } from '../shared/api'
+import './auxiliary.css'
 
 interface LibraryPanelProps {
   /** null until the first list arrives. */
@@ -17,91 +18,153 @@ interface LibraryPanelProps {
   className?: string
 }
 
-const iconButton = 'rounded p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-800 disabled:opacity-40'
-
 export function LibraryPanel(props: LibraryPanelProps) {
   const { patterns, error, currentId, busyId, onOpen, onDelete } = props
-  // Folded by default on small screens, where it sits above the grid; always open from lg up.
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
+  const reducedMotion = useReducedMotion()
 
   return (
-    <section className={`rounded-xl bg-white p-3 shadow-sm ${props.className ?? ''}`} aria-labelledby="library-title">
-      <div className="flex items-center gap-2">
+    <section className={`aux-panel library-panel ${props.className ?? ''}`} aria-labelledby="library-title">
+      <div className="library-heading">
         <button
           type="button"
           onClick={() => setOpen(!open)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left lg:pointer-events-none"
+          aria-controls="pattern-library"
+          className="aux-panel-toggle"
         >
-          <Library size={16} className="shrink-0 text-slate-500" />
-          <h2 id="library-title" className="truncate text-sm font-semibold text-slate-800">
-            My patterns{patterns ? ` (${patterns.length})` : ''}
-          </h2>
-          <ChevronDown size={16} className={`shrink-0 text-slate-500 transition-transform lg:hidden ${open ? 'rotate-180' : ''}`} />
+          <span className="aux-panel-icon">
+            <Library size={16} strokeWidth={1.6} />
+          </span>
+          <span className="aux-panel-title" id="library-title">
+            Meus desenhos
+          </span>
+          {patterns && <span className="aux-count">{patterns.length}</span>}
+          <ChevronDown size={14} className={`aux-chevron ${open ? 'is-open' : ''}`} />
         </button>
         <button
           type="button"
           onClick={props.onNew}
-          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          className="aux-icon-button library-new"
+          title="Novo desenho"
+          aria-label="Novo desenho"
         >
-          <Plus size={15} /> New pattern
+          <Plus size={16} />
         </button>
       </div>
-
-      <div className={`${open ? '' : 'hidden'} mt-2 lg:block`}>
-        {error ? (
-          <p className="text-sm text-red-600">
-            {error}{' '}
-            <button type="button" onClick={props.onRetry} className="font-medium underline">
-              Try again
-            </button>
-          </p>
-        ) : patterns === null ? (
-          <p className="inline-flex items-center gap-1.5 text-sm text-slate-500">
-            <LoaderCircle size={14} className="animate-spin" /> Loading…
-          </p>
-        ) : patterns.length === 0 ? (
-          <p className="text-sm text-slate-500">No saved patterns yet. Save this one to keep it here.</p>
-        ) : (
-          <ul className="max-h-80 space-y-0.5 overflow-y-auto">
-            {patterns.map((p) => {
-              const current = p.id === currentId
-              return (
-                <li key={p.id} className={`flex items-center gap-2 rounded-md px-2 py-1.5 ${current ? 'bg-slate-100' : ''}`}>
-                  <span className="flex shrink-0 flex-col gap-0.5" aria-hidden>
-                    <span className="h-2.5 w-2.5 rounded-sm border border-slate-300" style={{ background: p.colors.A }} />
-                    <span className="h-2.5 w-2.5 rounded-sm border border-slate-300" style={{ background: p.colors.B }} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-800" title={p.name}>
-                      {p.name}
-                      {current && <span className="ml-1.5 text-xs font-normal text-slate-500">(open)</span>}
-                    </p>
-                    <p className="text-xs text-slate-500 tabular-nums">
-                      {p.rows} × {p.cols} ·{' '}
-                      <time dateTime={p.updatedAt} title={new Date(p.updatedAt).toLocaleString()}>
-                        {formatUpdated(p.updatedAt)}
-                      </time>
-                    </p>
-                  </div>
-                  {busyId === p.id ? (
-                    <LoaderCircle size={16} className="mx-1.5 shrink-0 animate-spin text-slate-500" />
-                  ) : (
-                    <>
-                      <button type="button" className={iconButton} onClick={() => onOpen(p)} disabled={busyId !== null} title="Open" aria-label={`Open ${p.name}`}>
-                        <FolderOpen size={16} />
-                      </button>
-                      <button type="button" className={iconButton} onClick={() => onDelete(p)} disabled={busyId !== null} title="Delete" aria-label={`Delete ${p.name}`}>
-                        <Trash2 size={16} />
-                      </button>
-                    </>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="library"
+            id="pattern-library"
+            initial={{ height: reducedMotion ? 'auto' : 0, opacity: reducedMotion ? 1 : 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: reducedMotion ? 'auto' : 0, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="aux-collapse"
+          >
+            {error ? (
+              <p className="aux-empty aux-error" role="alert">
+                {error}{' '}
+                <button type="button" onClick={props.onRetry} className="aux-text-button">
+                  Tentar novamente
+                </button>
+              </p>
+            ) : patterns === null ? (
+              <p className="aux-empty aux-loading" role="status">
+                <LoaderCircle size={15} className="animate-spin" /> Reunindo seus desenhos…
+              </p>
+            ) : patterns.length === 0 ? (
+              <div className="library-empty">
+                <span className="library-empty-art" aria-hidden="true">
+                  <FolderOpen size={23} strokeWidth={1.25} />
+                </span>
+                <p>Toda coleção começa com uma ideia.</p>
+                <span>
+                  Salve seu desenho e volte a ele
+                  <br />
+                  quando a inspiração chamar.
+                </span>
+              </div>
+            ) : (
+              <ul className="library-list">
+                <AnimatePresence initial={false}>
+                  {patterns.map((p) => {
+                    const current = p.id === currentId
+                    return (
+                      <motion.li
+                        key={p.id}
+                        layout={!reducedMotion}
+                        initial={{ opacity: reducedMotion ? 1 : 0, y: reducedMotion ? 0 : 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                        className={`library-item ${current ? 'is-current' : ''}`}
+                      >
+                        <span
+                          className="library-swatch"
+                          aria-hidden="true"
+                          style={{ backgroundColor: p.colors.A, color: p.colors.B }}
+                        >
+                          <svg viewBox="0 0 32 36" fill="none">
+                            <path
+                              d="M-4 0 16 20 36 0M-4 9 16 29 36 9M-4 18 16 38 36 18M-4 27 16 47 36 27"
+                              stroke="currentColor"
+                              strokeWidth="5"
+                            />
+                          </svg>
+                        </span>
+                        <div className="library-details">
+                          <p title={p.name}>
+                            {p.name}
+                            {current && <span className="library-current-dot" aria-label="Desenho aberto" />}
+                          </p>
+                          <span>
+                            {p.rows} × {p.cols} ·{' '}
+                            <time dateTime={p.updatedAt} title={new Date(p.updatedAt).toLocaleString('pt-BR')}>
+                              {new Date(p.updatedAt).toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' })}
+                            </time>
+                          </span>
+                        </div>
+                        {busyId === p.id ? (
+                          <LoaderCircle
+                            size={15}
+                            className="library-spinner animate-spin"
+                            aria-label="Processando"
+                          />
+                        ) : (
+                          <div className="library-actions">
+                            <button
+                              type="button"
+                              className="aux-icon-button"
+                              onClick={() => onOpen(p)}
+                              disabled={busyId !== null}
+                              title="Abrir"
+                              aria-label={`Abrir ${p.name}`}
+                            >
+                              <FolderOpen size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              className="aux-icon-button aux-delete-button"
+                              onClick={() => onDelete(p)}
+                              disabled={busyId !== null}
+                              title="Excluir"
+                              aria-label={`Excluir ${p.name}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        )}
+                      </motion.li>
+                    )
+                  })}
+                </AnimatePresence>
+              </ul>
+            )}
+          </motion.div>
         )}
-      </div>
+      </AnimatePresence>
     </section>
   )
 }

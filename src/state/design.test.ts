@@ -11,7 +11,7 @@ const drawn: Design = {
 describe('designReducer', () => {
   it('starts as an untitled 15 × 20 pattern', () => {
     expect(initialDesign.name).toBe(DEFAULT_NAME)
-    expect(DEFAULT_NAME).toBe('Untitled pattern')
+    expect(DEFAULT_NAME).toBe('Novo padrão')
     expect([initialDesign.delta.length, initialDesign.delta[0].length]).toEqual([15, 20])
     expect(cellsOf(initialDesign.delta)).toEqual([])
   })

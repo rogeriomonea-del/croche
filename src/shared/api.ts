@@ -43,6 +43,8 @@ export interface InvalidDocumentDetails {
 export interface User {
   id: string
   email: string
+  /** Optional admin-assigned login name; existing accounts omit this field. */
+  displayName?: string
   createdAt: string
 }
 
@@ -51,6 +53,7 @@ export interface AuthConfig {
 }
 
 export interface Credentials {
+  /** E-mail for signup; e-mail or an admin-assigned login name for login. */
   email: string
   password: string
 }

@@ -1,7 +1,10 @@
-import { KeyRound, LoaderCircle, Trash2, X } from 'lucide-react'
+import { motion, useReducedMotion } from 'framer-motion'
+import { KeyRound, LoaderCircle, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError, authApi, inputErrors } from '../api/client'
-import { PASSWORD_MIN, passwordError, type User } from '../shared/api'
+import { PASSWORD_MIN, PASSWORD_MAX, passwordError, type User } from '../shared/api'
+
+import './auxiliary.css'
 
 interface AccountDialogProps {
   user: User
@@ -12,15 +15,15 @@ interface AccountDialogProps {
 }
 
 function errorMessage(e: unknown, wrongPassword: string): string {
-  if (!(e instanceof ApiError)) return 'Something went wrong. Try again.'
-  if (e.code === 'rate_limited' || e.status === 429) return 'Too many attempts, wait a minute'
+  if (!(e instanceof ApiError)) return 'Não foi possível continuar. Tente novamente.'
+  if (e.code === 'rate_limited' || e.status === 429) return 'Muitas tentativas. Aguarde um minuto e tente novamente.'
   if (e.code === 'invalid_credentials') return wrongPassword
   if (e.code === 'invalid_input') return inputErrors(e.details).join(' ') || e.message
   return e.message
 }
 
-const input = 'mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal focus:border-slate-500 focus:outline-none'
-const fieldError = 'mt-1 block text-xs font-normal text-red-600'
+const input = 'aux-input'
+const fieldError = 'aux-field-error'
 
 function ChangePassword({ email }: { email: string }) {
   const [currentPassword, setCurrentPassword] = useState('')
@@ -34,8 +37,10 @@ function ChangePassword({ email }: { email: string }) {
     e.preventDefault()
     if (busy) return
     setDone(false)
-    setError(currentPassword === '' ? 'Enter your current password' : null)
+    setError(currentPassword === '' ? 'Informe sua senha atual.' : null)
     const invalid = passwordError(newPassword)
+      ? `A senha deve ter entre ${PASSWORD_MIN} e ${PASSWORD_MAX} caracteres.`
+      : null
     setNewError(invalid)
     if (invalid || currentPassword === '') return
 
@@ -46,21 +51,21 @@ function ChangePassword({ email }: { email: string }) {
       setNewPassword('')
       setDone(true)
     } catch (err) {
-      setError(errorMessage(err, 'Current password is wrong'))
+      setError(errorMessage(err, 'A senha atual está incorreta.'))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-3">
-      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
-        <KeyRound size={15} /> Change password
+    <form onSubmit={handleSubmit} noValidate className="aux-form account-password-form">
+      <h3 className="account-section-title">
+        <KeyRound size={15} /> Alterar senha
       </h3>
       {/* Lets password managers file the new password under the right account. */}
       <input type="email" autoComplete="username" value={email} readOnly hidden />
-      <label className="block text-sm font-medium text-slate-700">
-        Current password
+      <label className="aux-field">
+        Senha atual
         <input
           type="password"
           autoComplete="current-password"
@@ -69,8 +74,8 @@ function ChangePassword({ email }: { email: string }) {
           className={input}
         />
       </label>
-      <label className="block text-sm font-medium text-slate-700">
-        New password
+      <label className="aux-field">
+        Nova senha
         <input
           type="password"
           autoComplete="new-password"
@@ -79,33 +84,35 @@ function ChangePassword({ email }: { email: string }) {
           aria-invalid={newError ? true : undefined}
           className={input}
         />
-        <span className={newError ? fieldError : 'mt-1 block text-xs font-normal text-slate-500'}>
-          {newError ?? `At least ${PASSWORD_MIN} characters.`}
+        <span className={newError ? fieldError : 'aux-field-hint'}>
+          {newError ?? `Pelo menos ${PASSWORD_MIN} caracteres.`}
         </span>
       </label>
       {error && (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p role="alert" className="aux-error-message">
           {error}
         </p>
       )}
       {done && (
-        <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          Password changed. Your other sessions were logged out.
+        <p role="status" className="aux-success-message">
+          Senha alterada. Suas outras sessões foram encerradas.
         </p>
       )}
-      <button
-        type="submit"
-        disabled={busy}
-        className="inline-flex items-center gap-2 rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
-      >
+      <button type="submit" disabled={busy} className="aux-primary">
         {busy && <LoaderCircle size={15} className="animate-spin" />}
-        Change password
+        Alterar senha
       </button>
     </form>
   )
 }
 
-function DeleteAccount({ patternCount, onAccountDeleted }: { patternCount: number | null; onAccountDeleted: () => void }) {
+function DeleteAccount({
+  patternCount,
+  onAccountDeleted,
+}: {
+  patternCount: number | null
+  onAccountDeleted: () => void
+}) {
   const [password, setPassword] = useState('')
   const [confirmed, setConfirmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -120,21 +127,25 @@ function DeleteAccount({ patternCount, onAccountDeleted }: { patternCount: numbe
       await authApi.deleteAccount({ password })
       onAccountDeleted()
     } catch (err) {
-      setError(errorMessage(err, 'Wrong password'))
+      setError(errorMessage(err, 'Senha incorreta.'))
       setBusy(false)
     }
   }
 
   const what =
-    patternCount === null ? 'all my saved patterns' : patternCount === 1 ? 'my 1 saved pattern' : `my ${patternCount} saved patterns`
+    patternCount === null
+      ? 'todos os meus desenhos salvos'
+      : patternCount === 1
+        ? 'meu desenho salvo'
+        : `meus ${patternCount} desenhos salvos`
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-3 rounded-lg border border-red-200 p-3">
-      <h3 className="flex items-center gap-1.5 text-sm font-semibold text-red-700">
-        <Trash2 size={15} /> Delete account
+    <form onSubmit={handleSubmit} noValidate className="aux-form account-delete-form">
+      <h3 className="account-section-title account-danger-title">
+        <Trash2 size={15} /> Excluir conta
       </h3>
-      <label className="block text-sm font-medium text-slate-700">
-        Password
+      <label className="aux-field">
+        Senha
         <input
           type="password"
           autoComplete="current-password"
@@ -143,22 +154,27 @@ function DeleteAccount({ patternCount, onAccountDeleted }: { patternCount: numbe
           className={input}
         />
       </label>
-      <label className="flex items-start gap-2 text-sm text-slate-700">
-        <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-0.5" />
-        <span>I understand that my account and {what} will be deleted for good. This cannot be undone.</span>
+      <label className="account-confirmation">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          onChange={(e) => setConfirmed(e.target.checked)}
+          className="account-checkbox"
+        />
+        <span>Entendo que minha conta e {what} serão excluídos permanentemente. Esta ação não pode ser desfeita.</span>
       </label>
       {error && (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p role="alert" className="aux-error-message">
           {error}
         </p>
       )}
       <button
         type="submit"
         disabled={busy || !confirmed || password === ''}
-        className="inline-flex items-center gap-2 rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+        className="aux-primary aux-danger"
       >
         {busy && <LoaderCircle size={15} className="animate-spin" />}
-        Delete my account
+        Excluir minha conta
       </button>
     </form>
   )
@@ -166,6 +182,7 @@ function DeleteAccount({ patternCount, onAccountDeleted }: { patternCount: numbe
 
 export function AccountDialog({ user, patternCount, onClose, onAccountDeleted }: AccountDialogProps) {
   const ref = useRef<HTMLDialogElement>(null)
+  const reducedMotion = useReducedMotion()
 
   useEffect(() => {
     const dialog = ref.current
@@ -182,23 +199,38 @@ export function AccountDialog({ user, patternCount, onClose, onAccountDeleted }:
         onClose()
       }}
       aria-labelledby="account-title"
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-xl bg-white p-5 text-slate-800 shadow-xl backdrop:bg-slate-900/50"
+      className="account-dialog"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 id="account-title" className="text-base font-semibold">
-            Account
-          </h2>
-          <p className="truncate text-sm text-slate-500">{user.email}</p>
+      <motion.div
+        initial={{ opacity: reducedMotion ? 1 : 0, y: reducedMotion ? 0 : 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      >
+        <div className="account-dialog-heading">
+          <div className="account-dialog-identity">
+            <span className="account-avatar" aria-hidden="true">
+              {(user.displayName ?? user.email).charAt(0).toUpperCase()}
+            </span>
+            <div>
+              <p className="account-eyebrow">SEU ESPAÇO DE CRIAÇÃO</p>
+              <h2 id="account-title">Conta do ateliê</h2>
+              <p className="account-email" title={user.displayName ?? user.email}>
+                {user.displayName ?? user.email}
+              </p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="aux-icon-button" aria-label="Fechar">
+            <X size={19} />
+          </button>
         </div>
-        <button type="button" onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">
-          <X size={18} />
-        </button>
-      </div>
-      <div className="mt-4 space-y-5">
-        <ChangePassword email={user.email} />
-        <DeleteAccount patternCount={patternCount} onAccountDeleted={onAccountDeleted} />
-      </div>
+        <p className="account-security-note">
+          <ShieldCheck size={15} /> Um lugar seguro para suas ideias e desenhos.
+        </p>
+        <div className="account-dialog-body">
+          <ChangePassword email={user.email} />
+          <DeleteAccount patternCount={patternCount} onAccountDeleted={onAccountDeleted} />
+        </div>
+      </motion.div>
     </dialog>
   )
 }

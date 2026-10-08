@@ -1,4 +1,4 @@
-# Mosaic Crochet Designer — Especificação v0.2
+# Crochet Victorioso — Especificação v0.3
 
 Fonte: engenharia reversa do app "BETA Overlay Mosaic Crochet Design Tool" (Sharon Machlis,
 apps.machlis.com/shiny/crochetapp). App original é R Shiny (DT + gt); lógica no servidor, código
@@ -84,7 +84,17 @@ RFC 4180 puro (sem linha `sep=`).
   Senha 10–256 caracteres, sem regras de composição (NIST 800-63B). Hash argon2id (m = 19 MiB,
   t = 2, p = 1).
 - Cadastro público só com `ALLOW_SIGNUP=true` (padrão `false`). Contas também por CLI.
-- Login com e-mail inexistente ou senha errada: mesma resposta (`401 invalid_credentials`) e tempo
+- Nome de login opcional atribuído por `user:alias <email> "<nome>"`: 3–80 caracteres Unicode,
+  letras/números/espaços/pontos/apóstrofos/sublinhados/hífens, ao menos uma letra ou número,
+  sem `@` nem controles. Nome de exibição em NFC, trim e espaços consecutivos reduzidos a um;
+  busca em minúsculas após a mesma normalização, com NFC reaplicado após converter minúsculas
+  para garantir idempotência. O intervalo de 3–80 caracteres vale tanto para o nome de exibição
+  quanto para a chave normalizada (algumas maiúsculas Unicode expandem ao converter).
+  Um nome único por conta, substituível pela CLI.
+  O e-mail continua válido para login; cadastro público continua exigindo e-mail.
+  A migração 2 acrescenta `user_aliases` sem alterar usuários, sessões ou padrões existentes;
+  a exclusão do usuário remove o nome por `ON DELETE CASCADE`.
+- Login com e-mail/nome inexistente ou senha errada: mesma resposta (`401 invalid_credentials`) e tempo
   equivalente (verifica contra hash fictício).
 - Sessão: token aleatório de 32 bytes no cookie; o banco guarda só o SHA-256. Cookie `HttpOnly`,
   `SameSite=Lax`, `Path=/`, `Secure` quando `COOKIE_SECURE` (nome `__Host-mosaic_session`; sem
@@ -95,8 +105,10 @@ RFC 4180 puro (sem linha `sep=`).
 - Requisição com corpo exige `Content-Type: application/json` (senão 415). Corpo ≤ 256 KiB.
 - POST/PUT/PATCH/DELETE com cabeçalho `Origin` diferente de `PUBLIC_ORIGIN` → `403 bad_origin`.
 - Rate limit: 300 req/min por IP em `/api`; login, cadastro, troca de senha e exclusão de conta
-  10/min por IP; 10 senhas erradas por e-mail em 15 min (somando login, troca de senha e exclusão de
-  conta) bloqueiam aquele e-mail até a janela fechar (`429 rate_limited`).
+  10/min por IP; 10 senhas erradas por conta em 15 min (somando login por nome ou e-mail, troca de
+  senha e exclusão de conta) bloqueiam a conta até a janela fechar (`429 rate_limited`).
+  Para contas existentes, a chave de bloqueio é sempre o e-mail canônico; identificadores
+  desconhecidos são contados pelo nome/e-mail normalizado.
 - Helmet com CSP `default-src 'self'` (sem `unsafe-inline`), `frame-ancestors 'none'`.
 - Log sem corpo de requisição; cookies e `set-cookie` redigidos.
 - Padrão de outro usuário responde `404`, nunca `403`. IDs são UUID v4.
@@ -109,7 +121,7 @@ Erro: `{ "error": { "code", "message", "details"? } }`. Datas em ISO 8601.
 | `GET /health` | | `200 {ok:true}` | |
 | `GET /auth/config` | | `200 {signupEnabled}` | |
 | `POST /auth/signup` | `{email,password}` | `201 {user}` + cookie | 400 `invalid_input`, 403 `signup_disabled`, 409 `email_taken` |
-| `POST /auth/login` | `{email,password}` | `200 {user}` + cookie | 400, 401 `invalid_credentials`, 429 |
+| `POST /auth/login` | `{email,password}` (`email` aceita e-mail ou nome de login) | `200 {user}` + cookie | 400, 401 `invalid_credentials`, 429 |
 | `POST /auth/logout` | | `204` | |
 | `GET /auth/me` | | `200 {user}` | 401 `unauthenticated` |
 | `POST /auth/password` | `{currentPassword,newPassword}` | `204` | 400, 401, 429 |
@@ -122,7 +134,8 @@ Erro: `{ "error": { "code", "message", "details"? } }`. Datas em ISO 8601.
 | `GET /patterns/:id/export.json` | | documento exportado (§10), anexo | 404 |
 | `GET /patterns/:id/export.csv` | | CSV do gráfico X, anexo | 404 |
 
-`user = {id,email,createdAt}`. `PatternSummary = {id,name,rows,cols,colors:{A,B},revision,createdAt,
+`user = {id,email,createdAt,displayName?}`; `displayName` só aparece quando há nome de login
+atribuído, inclusive em `/auth/me`. `PatternSummary = {id,name,rows,cols,colors:{A,B},revision,createdAt,
 updatedAt}`; `Pattern = PatternSummary + {document}`. Limite `MAX_PATTERNS_PER_USER` (padrão 500).
 
 ### 9.5 Configuração (env, validada no boot; valor inválido derruba o processo com mensagem clara)
@@ -147,3 +160,22 @@ Formato único para banco, API, export e import. Funções puras em `src/core/do
   `cells` (`'1'` = dc), `instructions` como §3.6 e `conflicts` como lista `[r, c]`.
 - `PATTERN_DOCUMENT_SCHEMA` (JSON Schema 2020-12) descreve a estrutura; as regras semânticas acima
   ficam em `parseDocument`.
+
+## 11. Crochet Victorioso: modelos e conversão de fotografias (v0.3)
+
+- A identidade visual pública é **Crochet Victorioso**, com interface em português.
+- A galeria contém 20 modelos originais, divididos em quatro categorias com cinco modelos cada.
+  A aplicação de um modelo cria uma cópia independente, validada pelo formato da seção 10,
+  com confirmação antes de substituir alterações não salvas. Todos respeitam bordas e conflitos.
+- O conversor aceita PNG, JPEG e WebP, até 12 MB e 24 megapixels. Decodificação, amostragem e
+  conversão acontecem no navegador; a foto não é enviada nem persistida no servidor.
+- A saída é uma aproximação do motivo visível em duas cores, sem inferir receitas tridimensionais,
+  modelagem ou pontos escondidos. Há enquadramento proporcional (foto inteira ou recorte central),
+  contraste automático/manual, inversão e dimensões nos limites originais (5–119 carreiras ímpares,
+  5–120 pontos por carreira).
+- A conversão usa luminância e programação dinâmica por coluna para minimizar o erro ponderado
+  em relação ao limiar escolhido, mantendo as bordas protegidas e evitando desvios consecutivos.
+  O resultado guarda apenas `delta`; cores, pontos altos, conflitos e instruções são derivados
+  pelo núcleo existente. A saída pode ser refinada, salva e exportada como qualquer outro padrão.
+- Modelos e fotos não alteram o núcleo, o ciclo de dois estados, os golden tests nem o contrato
+  de persistência. A extensão de login por nome está documentada nas seções 9.2–9.4.

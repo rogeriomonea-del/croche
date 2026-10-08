@@ -33,4 +33,11 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX patterns_owner_updated ON patterns(owner_id, updated_at DESC);
   `,
+  `
+  CREATE TABLE user_aliases (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    login_key TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL
+  );
+  `,
 ]

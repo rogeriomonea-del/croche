@@ -3,6 +3,8 @@ import { DAY_MS } from '../context'
 import { get, makeApp, PASSWORD, postJson, sessionCookie, setCookies, type TestApp } from '../test/helpers'
 import { getDummyHash, verifyPassword } from './passwords'
 import { hashToken, SESSION_REFRESH_MS } from './sessions'
+import { assignLoginAlias } from './users'
+import { normalizeLoginIdentifier } from '../../src/shared/login'
 
 // verifyPassword keeps its real behaviour; the spy only records who paid for an argon2 verify.
 vi.mock('./passwords', async (importOriginal) => {
@@ -138,6 +140,77 @@ describe('POST /api/auth/signup', () => {
 })
 
 describe('POST /api/auth/login', () => {
+  it('accepts Unicode aliases already normalized by the frontend', async () => {
+    t = await makeApp({ allowSignup: true })
+    const created = await signup()
+    const userId = created.json().user.id
+    assignLoginAlias(t.db, userId, 'J\u030cana Fios')
+    const composed = await login(normalizeLoginIdentifier('J\u030cana Fios'))
+    expect(composed.statusCode).toBe(200)
+    expect(composed.json().user.id).toBe(userId)
+    expect((await login('ǰana fios')).statusCode).toBe(200)
+    assignLoginAlias(t.db, userId, 'İ'.repeat(40))
+    expect((await login(normalizeLoginIdentifier('İ'.repeat(40)))).statusCode).toBe(200)
+    expect(() => assignLoginAlias(t.db, userId, 'İ'.repeat(41))).toThrow(/normalized/)
+    // Failed reassignment preserves the current working login.
+    expect((await login(normalizeLoginIdentifier('İ'.repeat(40)))).statusCode).toBe(200)
+  })
+
+  it('accepts the assigned login name with normalized case and spacing, and keeps e-mail login', async () => {
+    t = await makeApp({ allowSignup: true })
+    const created = await signup()
+    assignLoginAlias(t.db, created.json().user.id, '  José   dos Fios ')
+    const res = await login('  JOSE\u0301   DOS FIOS ')
+    expect(res.statusCode).toBe(200)
+    expect(res.json().user).toEqual({ ...created.json().user, displayName: 'José dos Fios' })
+    expect((await get(t.app, '/api/auth/me', sessionCookie(res))).json()).toEqual(res.json())
+    expect((await login('RO@example.com')).json()).toEqual(res.json())
+  })
+
+  it('keeps alias failures indistinguishable and verifies an unknown name against the dummy hash', async () => {
+    t = await makeApp({ allowSignup: true })
+    const created = await signup()
+    assignLoginAlias(t.db, created.json().user.id, 'Artista dos Fios')
+    const wrong = await login('Artista dos Fios', 'wrong password!')
+    const verify = vi.mocked(verifyPassword)
+    verify.mockClear()
+    const unknown = await login('Artista Desconhecido', PASSWORD)
+    expect(wrong.statusCode).toBe(401)
+    expect(unknown.statusCode).toBe(401)
+    expect(wrong.rawPayload.equals(unknown.rawPayload)).toBe(true)
+    expect(verify.mock.calls).toEqual([[await getDummyHash(), PASSWORD]])
+    expect(setCookies(wrong)).toEqual([])
+    expect(setCookies(unknown)).toEqual([])
+  })
+
+  it('shares the account throttle across alias, e-mail and authenticated password checks', async () => {
+    t = await makeApp({ allowSignup: true })
+    const created = await signup()
+    assignLoginAlias(t.db, created.json().user.id, 'Artista dos Fios')
+    const cookie = sessionCookie(created)
+    for (let i = 0; i < 10; i++) {
+      const identifier = i % 2 ? '  ARTISTA   DOS FIOS ' : 'RO@example.com'
+      expect((await login(identifier, 'wrong password!', `10.5.0.${i}`)).statusCode).toBe(401)
+    }
+    expect((await login('Artista dos Fios', PASSWORD, '10.6.0.1')).statusCode).toBe(429)
+    expect((await login('ro@example.com', PASSWORD, '10.6.0.2')).statusCode).toBe(429)
+    const change = await postJson(t.app, '/api/auth/password', { currentPassword: PASSWORD, newPassword: 'a whole new passphrase' }, { cookie, remoteAddress: '10.6.0.3' })
+    expect(change.statusCode).toBe(429)
+    const remove = await postJson(t.app, '/api/auth/delete-account', { password: PASSWORD }, { cookie, remoteAddress: '10.6.0.4' })
+    expect(remove.statusCode).toBe(429)
+    t.clock.advance(15 * 60 * 1000)
+    expect((await login('Artista dos Fios', PASSWORD, '10.6.0.5')).statusCode).toBe(200)
+  })
+
+  it('rejects malformed login names as invalid input and still refuses alias signup', async () => {
+    t = await makeApp({ allowSignup: true })
+    expect((await login('bad@alias')).statusCode).toBe(400)
+    const invalid = await login('name\x00control')
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json().error.details.fields.email).toMatch(/control/)
+    expect((await signup('Artista dos Fios')).statusCode).toBe(400)
+  })
+
   it('signs in with any case of the e-mail and sets a new session cookie', async () => {
     t = await makeApp({ allowSignup: true })
     await signup()
@@ -408,6 +481,7 @@ describe('POST /api/auth/delete-account', () => {
     await login('ro@example.com', PASSWORD, '10.0.0.2')
     const keeper = sessionCookie(await signup('other@example.com', PASSWORD, '10.0.0.3'))
     const userId = created.json().user.id
+    assignLoginAlias(t.db, userId, 'Artista dos Fios')
     t.db
       .prepare('INSERT INTO patterns VALUES (?, ?, ?, 5, 5, ?, 1, ?, ?)')
       .run('7d3c1f9e-8a51-4b8e-9d1a-0c6a7b2f4e10', userId, 'p', '{}', t.clock.now, t.clock.now)
@@ -423,8 +497,10 @@ describe('POST /api/auth/delete-account', () => {
     expect(count('SELECT count(*) AS n FROM users WHERE id = ?')).toBe(0)
     expect(count('SELECT count(*) AS n FROM sessions WHERE user_id = ?')).toBe(0)
     expect(count('SELECT count(*) AS n FROM patterns WHERE owner_id = ?')).toBe(0)
+    expect(count('SELECT count(*) AS n FROM user_aliases WHERE user_id = ?')).toBe(0)
     expect((await get(t.app, '/api/auth/me', cookie)).statusCode).toBe(401)
     expect((await login('ro@example.com', PASSWORD, '10.0.0.4')).statusCode).toBe(401)
+    expect((await login('Artista dos Fios', PASSWORD, '10.0.0.5')).statusCode).toBe(401)
     // Nobody else is affected.
     expect((await get(t.app, '/api/auth/me', keeper)).statusCode).toBe(200)
   })

@@ -6,9 +6,7 @@ import { Editor } from './components/Editor'
 import type { User } from './shared/api'
 
 type Session =
-  | { status: 'checking' }
-  | { status: 'unreachable'; message: string }
-  | { status: 'ready'; user: User | null }
+  { status: 'checking' } | { status: 'unreachable'; message: string } | { status: 'ready'; user: User | null }
 
 export default function App() {
   const [session, setSession] = useState<Session>({ status: 'checking' })
@@ -50,7 +48,7 @@ export default function App() {
     return (
       <div className="grid min-h-screen place-items-center bg-slate-100 text-sm text-slate-500">
         <span className="inline-flex items-center gap-2">
-          <LoaderCircle size={18} className="animate-spin" /> Loading…
+          <LoaderCircle size={18} className="animate-spin" /> Abrindo seu ateliê…
         </span>
       </div>
     )
@@ -69,7 +67,7 @@ export default function App() {
             }}
             className="mt-4 rounded-md bg-slate-800 px-3 py-1.5 font-medium text-white hover:bg-slate-700"
           >
-            Try again
+            Tentar novamente
           </button>
         </div>
       </div>
@@ -86,7 +84,7 @@ export default function App() {
       {expired && (
         <AuthScreen
           overlay
-          notice="Your session has ended. Log in again to keep working: unsaved changes stay in the editor."
+          notice="Sua sessão terminou. Entre novamente para continuar: seu desenho não salvo continua no editor."
           onAuthenticated={handleAuthenticated}
         />
       )}

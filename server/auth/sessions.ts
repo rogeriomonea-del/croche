@@ -32,7 +32,7 @@ export function createSession(db: Database, userId: string, now: number, ttlMs: 
 
 export interface ResolvedSession {
   tokenHash: string
-  user: Pick<UserRow, 'id' | 'email' | 'created_at'>
+  user: Pick<UserRow, 'id' | 'email' | 'created_at' | 'display_name'>
   /** The expiry was pushed forward: the cookie should be sent again with a fresh Max-Age. */
   renewed: boolean
 }
@@ -42,9 +42,10 @@ export function resolveSession(db: Database, token: string, now: number, ttlMs: 
   if (!TOKEN_RE.test(token)) return null
   const tokenHash = hashToken(token)
   const row = db
-    .prepare<[string], SessionRow & { email: string; user_created_at: number }>(
-      `SELECT s.*, u.email, u.created_at AS user_created_at
+    .prepare<[string], SessionRow & { email: string; user_created_at: number; display_name: string | null }>(
+      `SELECT s.*, u.email, u.created_at AS user_created_at, a.display_name
        FROM sessions s JOIN users u ON u.id = s.user_id
+       LEFT JOIN user_aliases a ON a.user_id = u.id
        WHERE s.token_hash = ?`,
     )
     .get(tokenHash)
@@ -57,7 +58,7 @@ export function resolveSession(db: Database, token: string, now: number, ttlMs: 
   if (renewed) {
     db.prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?').run(now, now + ttlMs, tokenHash)
   }
-  return { tokenHash, user: { id: row.user_id, email: row.email, created_at: row.user_created_at }, renewed }
+  return { tokenHash, user: { id: row.user_id, email: row.email, created_at: row.user_created_at, display_name: row.display_name }, renewed }
 }
 
 export function deleteSession(db: Database, tokenHash: string): void {

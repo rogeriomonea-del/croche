@@ -1,4 +1,25 @@
-import { CircleCheck, LoaderCircle, Lock, LogOut, Save, TriangleAlert, UserRound, X as Close } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  ArrowUpRight,
+  BookOpen,
+  CircleCheck,
+  Camera,
+  LayoutGrid,
+  Plus,
+  Eye,
+  Grid3x3,
+  Leaf,
+  LoaderCircle,
+  Lock,
+  LogOut,
+  PencilLine,
+  Redo2,
+  Save,
+  TriangleAlert,
+  Undo2,
+  UserRound,
+  X as Close,
+} from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react'
 import { ApiError, authApi, patternsApi } from '../api/client'
 import {
@@ -19,7 +40,11 @@ import {
 import { formatUpdated } from '../lib/format'
 import { fileSlug } from '../shared/filename'
 import type { Pattern, PatternSummary, RevisionConflictDetails, User } from '../shared/api'
-import { DEFAULT_NAME, designReducer, initialDesign } from '../state/design'
+import { DEFAULT_NAME, initialDesign } from '../state/design'
+import { historyReducer, initialHistory } from '../state/history'
+import { Brand } from './Brand'
+import { TemplateGallery } from './TemplateGallery'
+import { PhotoPatternDialog } from './PhotoPatternDialog'
 import { AccountDialog } from './AccountDialog'
 import { InstructionsPanel } from './InstructionsPanel'
 import { LibraryPanel } from './LibraryPanel'
@@ -27,18 +52,19 @@ import { MosaicGrid } from './MosaicGrid'
 import { Toolbar } from './Toolbar'
 
 const HINT: Record<View, string> = {
-  simulation: 'Click a cell to swap its color. The dc that makes it is placed for you on the row above.',
-  schematic: 'Click a cell to place or remove an X (dc). It drops two rows down and covers the cell below it.',
+  simulation: 'Clique para trocar a cor. O ponto alto correspondente é calculado na carreira acima.',
+  schematic:
+    'Clique para colocar ou retirar um X (ponto alto). Ele se ancora duas carreiras abaixo e cobre a célula de baixo.',
 }
 
 function blockedMessage(reason: BlockedReason, r: number): string {
   switch (reason) {
     case 'base-row':
-      return 'Row 1 is the base row: there is no row below it for a dc to drop into, so it keeps its color.'
+      return 'A carreira 1 é a base: não há carreira abaixo para ancorar o ponto alto. Sua cor é preservada.'
     case 'top-row':
-      return `Row ${r} is the top row: no row above it can work the dc that would cover this cell.`
+      return `A carreira ${r} é o topo: não há carreira acima para fazer o ponto alto que cobriria esta célula.`
     case 'no-anchor':
-      return `Row ${r} cannot hold a dc: a dc drops two rows down, so the first one goes on row 3.`
+      return `A carreira ${r} não aceita ponto alto: ele se ancora duas carreiras abaixo. O primeiro fica na carreira 3.`
   }
 }
 
@@ -63,7 +89,7 @@ const BLANK: Current = { id: null, revision: null, savedDocJson: docJson(initial
 const DETACHED: Current = { id: null, revision: null, savedDocJson: null }
 
 function messageOf(e: unknown): string {
-  return e instanceof Error ? e.message : 'Something went wrong.'
+  return e instanceof Error ? e.message : 'Não foi possível concluir esta ação.'
 }
 
 function documentErrors(e: ApiError): string[] {
@@ -81,8 +107,9 @@ function download(name: string, content: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-const headerButton = 'inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100'
-const bannerButton = 'rounded-md border border-current px-2.5 py-1 text-sm font-medium hover:bg-white/60 disabled:opacity-50'
+const headerButton = 'header-button'
+const bannerButton =
+  'rounded-md border border-current px-2.5 py-1 text-sm font-medium hover:bg-white/60 disabled:opacity-50'
 
 interface EditorProps {
   user: User
@@ -90,7 +117,8 @@ interface EditorProps {
 }
 
 export function Editor({ user, onLoggedOut }: EditorProps) {
-  const [design, dispatch] = useReducer(designReducer, initialDesign)
+  const [history, dispatch] = useReducer(historyReducer, initialHistory)
+  const design = history.present
   const [view, setView] = useState<View>('simulation')
   const [notice, setNotice] = useState<string | null>(null)
   const [current, setCurrent] = useState<Current>(BLANK)
@@ -101,6 +129,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   const [libraryError, setLibraryError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [creationPanel, setCreationPanel] = useState<'templates' | 'photo' | null>(null)
 
   // Bumped whenever another pattern takes over the editor, so a save still in flight for the old
   // one cannot stamp its id and revision onto the new one.
@@ -144,7 +173,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   }, [dirty])
 
   const confirmDiscard = () =>
-    !dirty || window.confirm(`Discard the unsaved changes to "${design.name.trim() || DEFAULT_NAME}"?`)
+    !dirty || window.confirm(`Descartar as alterações não salvas em "${design.name.trim() || DEFAULT_NAME}"?`)
 
   /** Puts another pattern in the editor. */
   const take = (data: DesignData, next: Current) => {
@@ -160,7 +189,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
     // The server validated it on the way in; checked again because a bad one would break the grid.
     const parsed = parseDocument(pattern.document)
     if (!parsed.ok) {
-      setBanner({ kind: 'errors', title: `"${pattern.name}" could not be opened`, errors: parsed.errors })
+      setBanner({ kind: 'errors', title: `Não foi possível abrir "${pattern.name}"`, errors: parsed.errors })
       return
     }
     const data = fromDocument(parsed.document)
@@ -172,7 +201,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
     const doc = toDocument(design)
     const parsed = parseDocument(doc)
     if (!parsed.ok) {
-      setBanner({ kind: 'errors', title: 'This pattern cannot be saved yet', errors: parsed.errors })
+      setBanner({ kind: 'errors', title: 'Revise o padrão antes de salvar', errors: parsed.errors })
       return
     }
     const gen = generation.current
@@ -185,9 +214,13 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
       const pattern =
         id === null
           ? await patternsApi.create({ document: parsed.document })
-          : await patternsApi.update(id, { revision: overwriteRevision ?? revision!, document: parsed.document })
+          : await patternsApi.update(id, {
+              revision: overwriteRevision ?? revision!,
+              document: parsed.document,
+            })
       // What was sent, not the canonical copy: the name stays as typed (untrimmed) in the editor.
-      if (gen === generation.current) setCurrent({ id: pattern.id, revision: pattern.revision, savedDocJson: JSON.stringify(doc) })
+      if (gen === generation.current)
+        setCurrent({ id: pattern.id, revision: pattern.revision, savedDocJson: JSON.stringify(doc) })
       refreshLibrary()
     } catch (e) {
       if (gen === generation.current) handleSaveError(e)
@@ -205,21 +238,41 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
         return latest ? setBanner({ kind: 'conflict', latest }) : setSaveError(e.message)
       }
       case 'invalid_document':
-        return setBanner({ kind: 'errors', title: 'The server refused this pattern', errors: documentErrors(e) })
+        return setBanner({
+          kind: 'errors',
+          title: 'O servidor não aceitou este padrão',
+          errors: documentErrors(e),
+        })
       case 'not_found':
         setCurrent(DETACHED)
         refreshLibrary()
-        return setSaveError('This pattern was deleted elsewhere. Save again to keep it as a new pattern.')
+        return setSaveError(
+          'Este padrão foi excluído em outra sessão. Salve novamente para criar uma nova cópia.',
+        )
       case 'pattern_quota_exceeded':
-        return setSaveError('You have reached the limit of saved patterns. Delete one to save this.')
+        return setSaveError('Você atingiu o limite de padrões salvos. Exclua um para salvar este.')
       case 'unauthenticated':
-        return setSaveError('Not saved: log in again, then save.')
+        return setSaveError('O padrão não foi salvo. Entre novamente e salve seu trabalho.')
       default:
         return setSaveError(e.message)
     }
   }
 
   const onSaveShortcut = useEffectEvent((e: KeyboardEvent) => {
+    // An expired session presents a modal above this still-mounted editor. Its keys belong
+    // to that modal, even though the hidden draft remains alive for reauthentication.
+    if ((e.target as HTMLElement)?.closest('[role="dialog"], dialog')) return
+    const editingText = (e.target as HTMLElement)?.closest('input, textarea, select, [contenteditable=true]')
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !editingText && !accountOpen) {
+      if (e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        dispatch({ type: e.shiftKey ? 'redo' : 'undo' })
+      }
+      if (e.key.toLowerCase() === 'y') {
+        e.preventDefault()
+        dispatch({ type: 'redo' })
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
       e.preventDefault()
       if (!accountOpen) save()
@@ -239,7 +292,11 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
       takePattern(await patternsApi.get(summary.id))
     } catch (e) {
       const gone = e instanceof ApiError && e.code === 'not_found'
-      setBanner({ kind: 'errors', title: `Could not open "${summary.name}"`, errors: [gone ? 'It no longer exists.' : messageOf(e)] })
+      setBanner({
+        kind: 'errors',
+        title: `Não foi possível abrir "${summary.name}"`,
+        errors: [gone ? 'Este padrão não existe mais.' : messageOf(e)],
+      })
       if (gone) refreshLibrary()
     } finally {
       setBusyId(null)
@@ -247,13 +304,18 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   }
 
   const deletePattern = async (summary: PatternSummary) => {
-    if (busyId !== null || !window.confirm(`Delete "${summary.name}"? This cannot be undone.`)) return
+    if (busyId !== null || !window.confirm(`Excluir "${summary.name}"? Esta ação não pode ser desfeita.`))
+      return
     setBusyId(summary.id)
     try {
       await patternsApi.remove(summary.id)
     } catch (e) {
       if (!(e instanceof ApiError && e.code === 'not_found')) {
-        setBanner({ kind: 'errors', title: `Could not delete "${summary.name}"`, errors: [messageOf(e)] })
+        setBanner({
+          kind: 'errors',
+          title: `Não foi possível excluir "${summary.name}"`,
+          errors: [messageOf(e)],
+        })
         setBusyId(null)
         return
       }
@@ -269,13 +331,14 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   }
 
   const handleImportFile = async (file: File) => {
-    const fail = (errors: string[]) => setBanner({ kind: 'errors', title: `"${file.name}" could not be imported`, errors })
-    if (file.size > MAX_IMPORT_BYTES) return fail(['The file is larger than 1 MB, far more than any pattern needs.'])
+    const fail = (errors: string[]) =>
+      setBanner({ kind: 'errors', title: `Não foi possível importar "${file.name}"`, errors })
+    if (file.size > MAX_IMPORT_BYTES) return fail(['O arquivo ultrapassa o limite de 1 MB para um padrão.'])
     let input: unknown
     try {
       input = JSON.parse(await file.text())
     } catch {
-      return fail(['The file is not valid JSON.'])
+      return fail(['O arquivo não contém um JSON válido.'])
     }
     const parsed = parseDocument(input)
     if (!parsed.ok) return fail(parsed.errors)
@@ -285,7 +348,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   const handleExportJson = () => {
     const parsed = parseDocument(toDocument(design))
     if (!parsed.ok) {
-      setBanner({ kind: 'errors', title: 'This pattern cannot be exported yet', errors: parsed.errors })
+      setBanner({ kind: 'errors', title: 'Revise o padrão antes de exportar', errors: parsed.errors })
       return
     }
     const content = JSON.stringify(exportDocument(parsed.document), null, 2) + '\n'
@@ -299,7 +362,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
     } catch (e) {
       // 401: already logged out, which is what was asked for.
       if (!(e instanceof ApiError && e.status === 401)) {
-        setBanner({ kind: 'errors', title: 'Could not log out', errors: [messageOf(e)] })
+        setBanner({ kind: 'errors', title: 'Não foi possível encerrar a sessão', errors: [messageOf(e)] })
         return
       }
     }
@@ -325,94 +388,231 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
     [view, rows],
   )
 
+  const handlePaintCells = useCallback(
+    (cells: { r: number; c: number }[], value: boolean) => {
+      const resolved: { r: number; c: number }[] = []
+      for (const cell of cells) {
+        const target = resolveClick(view, cell.r, cell.c, rows)
+        if (target.ok) resolved.push(target)
+        else setNotice(blockedMessage(target.reason, cell.r))
+      }
+      if (resolved.length) {
+        setNotice(null)
+        dispatch({ type: 'paint', cells: resolved, value })
+      }
+    },
+    [view, rows],
+  )
+
+  const applyCreation = (data: DesignData) => {
+    const parsed = parseDocument(toDocument(data))
+    if (!parsed.ok) {
+      setBanner({ kind: 'errors', title: 'Não foi possível abrir este padrão', errors: parsed.errors })
+      return
+    }
+    if (!confirmDiscard()) return
+    take(fromDocument(parsed.document), DETACHED)
+    setCreationPanel(null)
+  }
+
   const handleClear = () => {
-    if (cellsOf(design.delta).length > 0 && !window.confirm('Clear the whole grid? This cannot be undone.')) return
+    if (
+      cellsOf(design.delta).length > 0 &&
+      !window.confirm('Limpar toda a grade? Você pode restaurá-la com Desfazer.')
+    )
+      return
     dispatch({ type: 'clear' })
     setNotice(null)
   }
 
   const status = saving ? (
     <span className="inline-flex items-center gap-1 text-slate-500">
-      <LoaderCircle size={15} className="animate-spin" /> Saving…
+      <LoaderCircle size={15} className="animate-spin" /> Salvando…
     </span>
   ) : saveError ? (
     <span className="inline-flex items-center gap-1 text-red-600">
       <TriangleAlert size={15} className="shrink-0" /> {saveError}
     </span>
   ) : dirty ? (
-    <span className="text-amber-700">Unsaved changes</span>
+    <span className="text-amber-700">Alterações não salvas</span>
   ) : current.id !== null ? (
     <span className="inline-flex items-center gap-1 text-emerald-700">
-      <CircleCheck size={15} /> Saved
+      <CircleCheck size={15} /> Salvo
     </span>
   ) : (
-    <span className="text-slate-500">Not saved yet</span>
+    <span className="text-slate-500">Ainda não salvo</span>
   )
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800">
-      <header className="border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-semibold">Mosaic Crochet Architect</h1>
-            <p className="text-xs text-slate-500">Overlay mosaic crochet · rows alternate color A and B · row 1 at the bottom</p>
-          </div>
-          <div className="flex min-w-0 items-center gap-1">
-            <span className="min-w-0 max-w-[10rem] truncate text-sm text-slate-600 sm:max-w-[16rem]" title={user.email}>
-              {user.email}
-            </span>
-            <button type="button" className={headerButton} onClick={() => setAccountOpen(true)} aria-label="Account">
-              <UserRound size={16} /> <span className="hidden sm:inline">Account</span>
-            </button>
-            <button type="button" className={headerButton} onClick={handleLogout} aria-label="Log out">
-              <LogOut size={16} /> <span className="hidden sm:inline">Log out</span>
-            </button>
-          </div>
+    <div className="atelier-app">
+      <header className="atelier-header">
+        <a className="brand-link" href="#worktable" aria-label="Crochet Victorioso — ateliê">
+          <Brand />
+        </a>
+        <div className="header-center">
+          <span className="studio-live-dot" /> Seu tempo. Seus fios. Sua criação.
         </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-          <input
-            value={design.name}
-            onChange={(e) => dispatch({ type: 'rename', name: e.target.value })}
-            aria-label="Pattern name"
-            placeholder="Pattern name"
-            className="min-w-0 flex-1 basis-48 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium focus:border-slate-500 focus:outline-none sm:max-w-sm"
-          />
+        <div className="account-actions">
+          <span className="account-email" title={user.displayName ?? user.email}>
+            {user.displayName ?? user.email}
+          </span>
           <button
             type="button"
-            onClick={() => save()}
-            disabled={saving}
-            title="Save (Ctrl+S / ⌘S)"
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-60"
+            className={headerButton}
+            onClick={() => setAccountOpen(true)}
+            aria-label="Minha conta"
           >
-            <Save size={16} /> Save
+            <UserRound size={17} />
           </button>
-          <span className="text-sm" role="status">
-            {status}
-          </span>
+          <button type="button" className={headerButton} onClick={handleLogout} aria-label="Sair">
+            <LogOut size={16} />
+          </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl space-y-3 p-4">
+      <main className="atelier-main" id="worktable">
+        <div className="studio-intro">
+          <div>
+            <p className="eyebrow">
+              <span /> CROCHET VICTORIOSO / ESTÚDIO CRIATIVO
+            </p>
+            <h1>
+              Ideias que viram pontos<span>.</span>
+            </h1>
+            <p>Um encontro entre suas mãos, suas histórias e a beleza de criar.</p>
+          </div>
+          <div className="studio-note">
+            <Leaf size={21} strokeWidth={1.2} />
+            <span>
+              Feito com intenção.
+              <br />
+              <em>Criado com as mãos.</em>
+            </span>
+          </div>
+        </div>
+        <section className="creation-launchpad" aria-label="Comece uma criação">
+          <button
+            className="creation-card collection-card"
+            onClick={() => setCreationPanel('templates')}
+            aria-label="Explorar 20 modelos"
+          >
+            <span className="creation-card-icon">
+              <LayoutGrid size={22} strokeWidth={1.3} />
+            </span>
+            <span>
+              <span className="creation-kicker">A COLEÇÃO VICTORIOSO</span>
+              <strong>20 maneiras de começar.</strong>
+              <small>Flores, geometrias e pequenos encantos.</small>
+            </span>
+            <ArrowUpRight size={19} />
+          </button>
+          <button
+            className="creation-card photo-card"
+            onClick={() => setCreationPanel('photo')}
+            aria-label="Converter foto em pontos"
+          >
+            <span className="creation-card-icon">
+              <Camera size={23} strokeWidth={1.3} />
+            </span>
+            <span>
+              <span className="creation-kicker">DA INSPIRAÇÃO AO FIO</span>
+              <strong>Sua foto, ponto a ponto.</strong>
+              <small>Transforme uma imagem em um motivo de mosaico.</small>
+            </span>
+            <ArrowUpRight size={19} />
+          </button>
+          <button className="creation-blank" onClick={handleNew} aria-label="Criar padrão em branco">
+            <Plus size={20} strokeWidth={1.4} />
+            <span>
+              Uma tela em branco<small>Para uma ideia só sua</small>
+            </span>
+          </button>
+        </section>
+        <div className="document-bar">
+          <div className="document-name">
+            <PencilLine size={16} />
+            <input
+              value={design.name}
+              onChange={(e) => dispatch({ type: 'rename', name: e.target.value })}
+              aria-label="Nome do padrão"
+              placeholder="Dê um nome ao seu padrão"
+              maxLength={100}
+            />
+            <span className="document-kind">
+              PADRÃO / {rows} × {cols}
+            </span>
+          </div>
+          <div className="document-actions">
+            <span className="save-status" role="status">
+              {status}
+            </span>
+            <span className="history-buttons">
+              <button
+                className="icon-button"
+                aria-label="Desfazer"
+                title="Desfazer (Ctrl/⌘ Z)"
+                disabled={!history.past.length}
+                onClick={() => dispatch({ type: 'undo' })}
+              >
+                <Undo2 size={17} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Refazer"
+                title="Refazer (Ctrl/⌘ Shift Z)"
+                disabled={!history.future.length}
+                onClick={() => dispatch({ type: 'redo' })}
+              >
+                <Redo2 size={17} />
+              </button>
+            </span>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => save()}
+              disabled={saving}
+              title="Salvar (Ctrl+S / ⌘S)"
+            >
+              <Save size={15} /> Salvar padrão
+              <ArrowUpRight size={14} />
+            </button>
+          </div>
+        </div>
         {banner?.kind === 'conflict' && (
-          <div role="alert" className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
+          >
             <p className="min-w-0 flex-1 basis-64">
-              <TriangleAlert size={15} className="mr-1 inline align-[-2px]" />
-              "{banner.latest.name}" was saved somewhere else ({formatUpdated(banner.latest.updatedAt)}). Load latest discards
-              your changes here; Overwrite replaces that version with yours.
+              <TriangleAlert size={15} className="mr-1 inline align-[-2px]" />"{banner.latest.name}" foi salvo
+              em outra sessão ({formatUpdated(banner.latest.updatedAt)}). Carregar versão atual descarta suas
+              alterações; Sobrescrever substitui a versão salva pela sua.
             </p>
             <div className="flex gap-2">
-              <button type="button" className={bannerButton} onClick={() => takePattern(banner.latest)} disabled={saving}>
-                Load latest
+              <button
+                type="button"
+                className={bannerButton}
+                onClick={() => takePattern(banner.latest)}
+                disabled={saving}
+              >
+                Carregar versão atual
               </button>
-              <button type="button" className={bannerButton} onClick={() => save(banner.latest.revision)} disabled={saving}>
-                Overwrite
+              <button
+                type="button"
+                className={bannerButton}
+                onClick={() => save(banner.latest.revision)}
+                disabled={saving}
+              >
+                Sobrescrever
               </button>
             </div>
           </div>
         )}
         {banner?.kind === 'errors' && (
-          <div role="alert" className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+          >
             <div className="min-w-0 flex-1">
               <p className="font-medium">{banner.title}</p>
               <ul className="mt-1 list-disc space-y-0.5 pl-5 break-words">
@@ -421,93 +621,166 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
                 ))}
               </ul>
               {banner.errors.length > MAX_SHOWN_ERRORS && (
-                <p className="mt-1 text-red-700">and {banner.errors.length - MAX_SHOWN_ERRORS} more</p>
+                <p className="mt-1 text-red-700">e mais {banner.errors.length - MAX_SHOWN_ERRORS}</p>
               )}
             </div>
-            <button type="button" onClick={() => setBanner(null)} className="rounded p-0.5 hover:bg-red-100" aria-label="Dismiss">
+            <button
+              type="button"
+              onClick={() => setBanner(null)}
+              className="rounded p-0.5 hover:bg-red-100"
+              aria-label="Fechar aviso"
+            >
               <Close size={16} />
             </button>
           </div>
         )}
 
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem] lg:grid-rows-[auto_1fr]">
-          <LibraryPanel
-            className="lg:col-start-2 lg:row-start-1"
-            patterns={patterns}
-            error={libraryError}
-            currentId={current.id}
-            busyId={busyId}
-            onOpen={openPattern}
-            onDelete={deletePattern}
-            onNew={handleNew}
-            onRetry={refreshLibrary}
+        <div className="studio-layout">
+          <Toolbar
+            rows={rows}
+            cols={cols}
+            onResize={(r, c) => {
+              dispatch({ type: 'resize', rows: r, cols: c })
+              setNotice(null)
+            }}
+            colors={design.colors}
+            onColorChange={(yarn, color) => dispatch({ type: 'setColor', yarn, color })}
+            onSwapColors={() => dispatch({ type: 'swapColors' })}
+            onClear={handleClear}
+            onDownloadCsv={() => download(`${fileSlug(design.name)}.csv`, toCsv(X), 'text/csv;charset=utf-8')}
+            onExportJson={handleExportJson}
+            onImportFile={handleImportFile}
+            onTemplates={() => setCreationPanel('templates')}
+            onPhoto={() => setCreationPanel('photo')}
           />
 
-          <div className="min-w-0 space-y-3 lg:col-start-1 lg:row-span-2 lg:row-start-1">
-            <Toolbar
+          <section className="worktable-column" aria-label="Bancada de criação">
+            <div className="worktable-heading">
+              <div>
+                <span className="eyebrow">SUA BANCADA DE CRIAÇÃO</span>
+                <h2>O próximo ponto é seu.</h2>
+              </div>
+              <div className="view-switch" role="group" aria-label="Visualização">
+                {[
+                  { id: 'schematic' as const, label: 'Gráfico', icon: Grid3x3 },
+                  { id: 'simulation' as const, label: 'Simulação', icon: Eye },
+                ].map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    aria-pressed={view === id}
+                    onClick={() => {
+                      setView(id)
+                      setNotice(null)
+                    }}
+                  >
+                    {view === id && (
+                      <motion.span
+                        layoutId="view-pill"
+                        className="view-pill"
+                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                      />
+                    )}
+                    <Icon size={14} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <MosaicGrid
+              key={generation.current}
               view={view}
-              onViewChange={(v) => {
-                setView(v)
-                setNotice(null)
-              }}
-              rows={rows}
-              cols={cols}
-              onResize={(r, c) => {
-                dispatch({ type: 'resize', rows: r, cols: c })
-                setNotice(null)
-              }}
+              delta={design.delta}
+              X={X}
+              conflictX={conflictX}
               colors={design.colors}
-              onColorChange={(yarn, color) => dispatch({ type: 'setColor', yarn, color })}
-              onSwapColors={() => dispatch({ type: 'swapColors' })}
-              onClear={handleClear}
-              onDownloadCsv={() => download(`${fileSlug(design.name)}.csv`, toCsv(X), 'text/csv;charset=utf-8')}
-              onExportJson={handleExportJson}
-              onImportFile={handleImportFile}
+              onCellClick={handleCellClick}
+              onPaintCells={handlePaintCells}
+              onStrokeStart={() => dispatch({ type: 'strokeStart' })}
+              onStrokeEnd={() => dispatch({ type: 'strokeEnd' })}
             />
-
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm" aria-live="polite">
-              <span className="text-slate-500">{HINT[view]}</span>
+            <div className="pattern-health" aria-live="polite">
               {conflictCells.length > 0 ? (
-                <span className="inline-flex items-center gap-1 font-medium text-red-600">
-                  <TriangleAlert size={15} /> {conflictCells.length} dc in conflict: dc on consecutive rows of the same column
+                <span className="conflict-status">
+                  <TriangleAlert size={15} />
+                  {conflictCells.length} pontos altos em conflito{' '}
+                  <span>· carreiras consecutivas na mesma coluna</span>
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 text-emerald-700">
-                  <CircleCheck size={15} /> No conflicts
+                <span className="healthy-status">
+                  <CircleCheck size={15} /> Seu padrão está livre de conflitos
                 </span>
               )}
-              {notice && (
-                <span className="inline-flex items-center gap-1 text-amber-700">
-                  <Lock size={15} /> {notice}
-                </span>
-              )}
+              <span>{rows * cols} pontos · 2 fios</span>
             </div>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={notice ? 'notice' : view}
+                className={`worktable-hint ${notice ? 'has-notice' : ''}`}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+              >
+                {notice ? (
+                  <>
+                    <Lock size={14} />
+                    <span>{notice}</span>
+                  </>
+                ) : (
+                  <>
+                    <BookOpen size={14} />
+                    <span>{HINT[view]}</span>
+                  </>
+                )}
+              </motion.div>
+            </AnimatePresence>
+            <div className="worktable-caption">
+              <span>01 — A BELEZA DE FAZER COM CALMA</span>
+              <span>Em cada ponto, uma possibilidade.</span>
+            </div>
+          </section>
 
-            {/* The chart scrolls inside its own box, so a 119 × 120 grid never widens the page. */}
-            <section className="max-h-[75vh] overflow-auto rounded-xl bg-white p-3 shadow-sm">
-              <MosaicGrid
-                view={view}
-                delta={design.delta}
-                X={X}
-                conflictX={conflictX}
-                colors={design.colors}
-                onCellClick={handleCellClick}
-              />
-            </section>
-          </div>
-
-          <InstructionsPanel className="lg:col-start-2 lg:row-start-2" lines={lines} conflictRows={conflictRows} />
+          <aside className="reference-sidebar" aria-label="Caderno de padrões">
+            <InstructionsPanel lines={lines} conflictRows={conflictRows} />
+            <LibraryPanel
+              patterns={patterns}
+              error={libraryError}
+              currentId={current.id}
+              busyId={busyId}
+              onOpen={openPattern}
+              onDelete={deletePattern}
+              onNew={handleNew}
+              onRetry={refreshLibrary}
+            />
+          </aside>
         </div>
+        <footer className="studio-footer">
+          <span>
+            Crochet Victorioso <span>·</span> Onde a inspiração encontra o fio.
+          </span>
+          <span>UMA CARREIRA DE CADA VEZ.</span>
+        </footer>
       </main>
-
-      {accountOpen && (
-        <AccountDialog
-          user={user}
-          patternCount={patterns?.length ?? null}
-          onClose={() => setAccountOpen(false)}
-          onAccountDeleted={onLoggedOut}
+      {creationPanel === 'templates' && (
+        <TemplateGallery onClose={() => setCreationPanel(null)} onApply={applyCreation} />
+      )}
+      {creationPanel === 'photo' && (
+        <PhotoPatternDialog
+          colors={design.colors}
+          onClose={() => setCreationPanel(null)}
+          onApply={applyCreation}
         />
       )}
+      <AnimatePresence>
+        {accountOpen && (
+          <AccountDialog
+            user={user}
+            patternCount={patterns?.length ?? null}
+            onClose={() => setAccountOpen(false)}
+            onAccountDeleted={onLoggedOut}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

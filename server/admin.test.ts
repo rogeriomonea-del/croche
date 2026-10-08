@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
-import { backupDatabase, CliError, createUser, formatUserList, removeUser, runCli, setUserPassword, type CliDeps } from './admin'
+import { backupDatabase, CliError, createUser, formatUserList, removeUser, runCli, setUserAlias, setUserPassword, type CliDeps } from './admin'
 import { buildApp } from './app'
-import { insertUser } from './auth/users'
-import { openDatabase } from './db'
+import { findUserByLogin, insertUser, LoginAliasTakenError } from './auth/users'
+import { LATEST_VERSION, openDatabase } from './db'
 import { get, makeApp, PASSWORD, postJson, sessionCookie, testConfig, type TestApp } from './test/helpers'
 
 const dir = mkdtempSync(join(tmpdir(), 'mosaic-cli-'))
@@ -33,6 +33,21 @@ function cliDeps(env: Record<string, string>, stdinText?: string): CliDeps & { o
 }
 
 describe('admin functions', () => {
+  it('assigns a unique name, supports safe reassignment and rejects normalized duplicates', async () => {
+    t = await makeApp()
+    const first = await createUser(t.db, 'ro@example.com', PASSWORD)
+    await createUser(t.db, 'other@example.com', PASSWORD)
+    expect(setUserAlias(t.db, '  RO@example.com ', '  José   dos Fios ')).toBe('José dos Fios')
+    expect(findUserByLogin(t.db, 'josé dos fios')?.id).toBe(first.id)
+    expect(() => setUserAlias(t!.db, 'other@example.com', 'JOSE\u0301 DOS FIOS')).toThrow(LoginAliasTakenError)
+    expect(findUserByLogin(t.db, 'josé dos fios')?.id).toBe(first.id)
+    expect(setUserAlias(t.db, 'ro@example.com', 'Novo Ateliê')).toBe('Novo Ateliê')
+    expect(findUserByLogin(t.db, 'josé dos fios')).toBeUndefined()
+    expect(findUserByLogin(t.db, 'novo ateliê')?.id).toBe(first.id)
+    expect(() => setUserAlias(t!.db, 'other@example.com', 'other@example.com')).toThrow(/letters/)
+    expect(() => setUserAlias(t!.db, 'ghost@example.com', 'Missing Artist')).toThrow(/No user/)
+  })
+
   it('creates a user who can then sign in through the API', async () => {
     t = await makeApp({ allowSignup: false })
     const user = await createUser(t.db, ' Ro@Example.com ', PASSWORD)
@@ -101,6 +116,32 @@ describe('admin functions', () => {
 })
 
 describe('runCli', () => {
+  it('user:alias assigns a login name without receiving or printing a password', async () => {
+    const dbPath = join(dir, 'alias.db')
+    const db = openDatabase(dbPath)
+    await createUser(db, 'ro@example.com', PASSWORD)
+    db.close()
+    const deps = cliDeps({ DATABASE_PATH: dbPath })
+    expect(await runCli(['user:alias', 'ro@example.com', 'Artista dos Fios'], deps)).toBe(0)
+    expect(deps.out()).toBe('Login name set to Artista dos Fios for ro@example.com\n')
+    expect(deps.err()).toBe('')
+    expect(deps.out()).not.toContain(PASSWORD)
+    const appDb = openDatabase(dbPath)
+    const app = await buildApp({ config: testConfig({ databasePath: dbPath }), db: appDb })
+    try {
+      const res = await postJson(app, '/api/auth/login', { email: 'artista dos fios', password: PASSWORD })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().user.displayName).toBe('Artista dos Fios')
+    } finally {
+      await app.close()
+      appDb.close()
+    }
+    const badArgs = cliDeps({ DATABASE_PATH: dbPath })
+    expect(await runCli(['user:alias', 'ro@example.com'], badArgs)).toBe(1)
+    const passwordFlag = cliDeps({ DATABASE_PATH: dbPath })
+    expect(await runCli(['user:alias', 'ro@example.com', 'Artista dos Fios', '--password-stdin'], passwordFlag)).toBe(1)
+  })
+
   it('user:create --password-stdin, then the server accepts the login', async () => {
     const dbPath = join(dir, 'cli.db')
     const deps = cliDeps({ DATABASE_PATH: dbPath }, `${PASSWORD}\n`)
@@ -162,10 +203,10 @@ describe('runCli', () => {
     const dbPath = join(dir, 'migrate.db')
     const first = cliDeps({ DATABASE_PATH: dbPath })
     expect(await runCli(['db:migrate'], first)).toBe(0)
-    expect(first.out()).toBe('Schema migrated from version 0 to 1\n')
+    expect(first.out()).toBe(`Schema migrated from version 0 to ${LATEST_VERSION}\n`)
     const second = cliDeps({ DATABASE_PATH: dbPath })
     expect(await runCli(['db:migrate'], second)).toBe(0)
-    expect(second.out()).toBe('Schema already at version 1\n')
+    expect(second.out()).toBe(`Schema already at version ${LATEST_VERSION}\n`)
 
     const dest = join(dir, 'migrate-backup.db')
     const backup = cliDeps({ DATABASE_PATH: dbPath })

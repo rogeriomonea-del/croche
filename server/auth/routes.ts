@@ -10,13 +10,14 @@ import {
   type DeleteAccountRequest,
   type User,
 } from '../../src/shared/api'
+import { loginIdentifierError, normalizeLoginIdentifier } from '../../src/shared/login'
 import { sessionTtlMs, type AppContext } from '../context'
 import { ApiError, invalidInput } from '../http/errors'
 import { clearSessionCookie, readSessionCookie, setSessionCookie } from './cookies'
 import { currentUser } from './guard'
 import { getDummyHash, hashPassword, verifyPassword } from './passwords'
 import { createSession, deleteSession, deleteUserSessions, hashToken } from './sessions'
-import { deleteUser, EmailTakenError, findUserByEmail, findUserById, insertUser, toUser, updatePasswordHash } from './users'
+import { deleteUser, EmailTakenError, findUserByEmail, findUserById, findUserByLogin, insertUser, toUser, updatePasswordHash } from './users'
 
 // SPEC §9.3: 10 per minute per IP on every endpoint that checks a password.
 const AUTH_RATE_LIMIT = { max: 10, timeWindow: 60_000 }
@@ -30,7 +31,7 @@ function bodySchema<K extends string>(...keys: K[]) {
   }
 }
 
-const invalidCredentials = () => new ApiError(401, 'invalid_credentials', 'Incorrect e-mail or password')
+const invalidCredentials = () => new ApiError(401, 'invalid_credentials', 'Incorrect login name, e-mail or password')
 
 /** Login only checks what any stored account must satisfy, so tightening the signup rules later locks no one out. */
 function loginPasswordError(password: string): string | null {
@@ -109,27 +110,28 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     '/api/auth/login',
     { schema: { body: bodySchema('email', 'password') }, config: { rateLimit: AUTH_RATE_LIMIT } },
     async (request, reply): Promise<{ user: User }> => {
-      const email = normalizeEmail(request.body.email)
+      const identifier = normalizeLoginIdentifier(request.body.email)
       const { password } = request.body
       const fields: Record<string, string> = {}
-      const emailProblem = emailError(email)
+      const emailProblem = loginIdentifierError(request.body.email)
       const passwordProblem = loginPasswordError(password)
       if (emailProblem) fields.email = emailProblem
       if (passwordProblem) fields.password = passwordProblem
       if (emailProblem || passwordProblem) throw invalidInput(fields)
 
-      assertNotLocked(reply, email)
-
-      const user = findUserByEmail(db, email)
+      const user = findUserByLogin(db, identifier)
+      // Every identifier of a real account shares the same bucket, including password changes.
+      const throttleKey = user?.email ?? identifier
+      assertNotLocked(reply, throttleKey)
       let ok = false
       if (user) ok = await verifyPassword(user.password_hash, password)
-      // Unknown e-mails pay for a verification too, so response time does not reveal which exist.
+      // Unknown e-mails and names pay for a verification too, hiding which accounts exist.
       else await verifyPassword(await getDummyHash(), password)
       if (!user || !ok) {
-        loginThrottle.recordFailure(email, now())
+        loginThrottle.recordFailure(throttleKey, now())
         throw invalidCredentials()
       }
-      loginThrottle.reset(email)
+      loginThrottle.reset(throttleKey)
 
       // A fresh token on every sign-in; the one the browser held (if any) stops working.
       const previous = readSessionCookie(request, config)

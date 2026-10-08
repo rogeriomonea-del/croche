@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import { emailError, normalizeEmail, passwordError } from '../src/shared/api'
 import { hashPassword } from './auth/passwords'
 import { deleteUserSessions } from './auth/sessions'
-import { deleteUser, findUserByEmail, insertUser, listUsers, updatePasswordHash, type UserRow } from './auth/users'
+import { assignLoginAlias, deleteUser, findUserByEmail, insertUser, listUsers, updatePasswordHash, type UserRow } from './auth/users'
 import { loadConfig } from './config'
 import { migrate, openDatabase, type Database } from './db'
 
@@ -36,6 +36,11 @@ export function removeUser(db: Database, rawEmail: string): UserRow {
   const user = requireUser(db, rawEmail)
   deleteUser(db, user.id)
   return user
+}
+
+/** Adds a friendly login name to an existing account. The e-mail remains a valid login. */
+export function setUserAlias(db: Database, rawEmail: string, displayName: string): string {
+  return assignLoginAlias(db, requireUser(db, rawEmail).id, displayName)
 }
 
 export function formatUserList(db: Database): string {
@@ -97,6 +102,7 @@ export const USAGE = `Usage: mosaic-cli <command>
 
   user:create <email> [--password-stdin]        create an account (works with ALLOW_SIGNUP=false)
   user:set-password <email> [--password-stdin]  set a new password and end that user's sessions
+  user:alias <email> "<login name>"             assign or replace a unique login name
   user:delete <email>                           delete the account, its sessions and patterns
   user:list                                     list accounts
   db:backup <dest-file>                         write a consistent copy of the database
@@ -122,6 +128,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   const arity: Record<string, number> = {
     'user:create': 1,
     'user:set-password': 1,
+    'user:alias': 2,
     'user:delete': 1,
     'user:list': 0,
     'db:backup': 1,
@@ -165,6 +172,9 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       }
       case 'user:delete':
         out(`Deleted user ${removeUser(db, arg).email}`)
+        break
+      case 'user:alias':
+        out(`Login name set to ${setUserAlias(db, arg, args[1])} for ${normalizeEmail(arg)}`)
         break
       case 'user:list':
         deps.stdout.write(formatUserList(db))
