@@ -3,11 +3,12 @@ import { TriangleAlert } from 'lucide-react'
 interface InstructionsPanelProps {
   lines: string[]
   conflictRows: Set<number>
+  className?: string
 }
 
-export function InstructionsPanel({ lines, conflictRows }: InstructionsPanelProps) {
+export function InstructionsPanel({ lines, conflictRows, className = '' }: InstructionsPanelProps) {
   return (
-    <aside className="rounded-xl bg-white p-4 shadow-sm">
+    <aside className={`rounded-xl bg-white p-4 shadow-sm ${className}`}>
       <h2 className="text-sm font-semibold text-slate-800">Written instructions</h2>
       <p className="mt-0.5 text-xs text-slate-500">Every row from the right side, read right to left.</p>
       <ol className="mt-3 max-h-[70vh] space-y-1 overflow-auto font-mono text-[13px] text-slate-700">

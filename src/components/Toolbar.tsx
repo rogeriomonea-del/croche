@@ -1,5 +1,5 @@
-import { ArrowLeftRight, Download, Eye, Grid3x3, Trash2 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ArrowLeftRight, Download, Eye, FileJson, Grid3x3, Trash2, Upload } from 'lucide-react'
+import { useRef, type ReactNode } from 'react'
 import { COL_OPTIONS, ROW_OPTIONS, YARN_LABEL, type View, type Yarn } from '../core'
 
 interface ToolbarProps {
@@ -13,6 +13,8 @@ interface ToolbarProps {
   onSwapColors: () => void
   onClear: () => void
   onDownloadCsv: () => void
+  onExportJson: () => void
+  onImportFile: (file: File) => void
 }
 
 const button =
@@ -36,6 +38,7 @@ function ViewButton({ active, onClick, children }: { active: boolean; onClick: (
 export function Toolbar(props: ToolbarProps) {
   const { view, onViewChange, rows, cols, onResize, colors, onColorChange } = props
   const yarns: Yarn[] = ['main', 'pattern']
+  const fileInput = useRef<HTMLInputElement>(null)
 
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl bg-white p-3 shadow-sm">
@@ -96,9 +99,27 @@ export function Toolbar(props: ToolbarProps) {
         <button type="button" className={button} onClick={props.onClear}>
           <Trash2 size={16} /> Clear
         </button>
-        <button type="button" className={button} onClick={props.onDownloadCsv}>
+        <button type="button" className={button} onClick={props.onDownloadCsv} title="Download the X chart as CSV">
           <Download size={16} /> CSV
         </button>
+        <button type="button" className={button} onClick={props.onExportJson} title="Download this pattern as a .mosaic.json file">
+          <FileJson size={16} /> Export JSON
+        </button>
+        <button type="button" className={button} onClick={() => fileInput.current?.click()} title="Open a .mosaic.json file">
+          <Upload size={16} /> Import JSON
+        </button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            // Cleared so picking the same file again still fires a change.
+            e.target.value = ''
+            if (file) props.onImportFile(file)
+          }}
+        />
       </div>
     </div>
   )
