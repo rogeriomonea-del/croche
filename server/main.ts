@@ -4,6 +4,10 @@ import { openDatabase } from './db'
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
+// The database holds every account's e-mail and password hash: owner-only files, whatever umask
+// the container or shell started us with (Docker's is 022).
+process.umask(0o077)
+
 let config: Config
 try {
   config = loadConfig()

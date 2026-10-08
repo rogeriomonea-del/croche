@@ -66,11 +66,14 @@ Os comandos `docker` abaixo precisam de `sudo` se o seu usuário não estiver no
    ```
    Deixe `HOST`, `PORT`, `DATABASE_PATH` e `STATIC_DIR` comentadas: a imagem já define os valores
    certos para o container, e o `.env` passaria por cima deles.
-3. **Crie a pasta de dados com o dono certo.** Sem isso o app não consegue criar o banco.
+3. **Crie a pasta de dados com o dono certo.** Sem isso o app não consegue criar o banco. O modo
+   700 impede que outras contas do VPS leiam o banco e os backups (e-mails e hashes de senha).
    ```sh
-   mkdir -p data
-   sudo chown 1000:1000 data
+   sudo install -d -m 700 -o 1000 -g 1000 data
    ```
+   Se a pasta já existe, `sudo chown 1000:1000 data && sudo chmod 700 data`. No host, o dono é
+   quem tiver o uid 1000; no Ubuntu costuma ser o primeiro usuário criado, que assim também lê o
+   banco. Se isso não serve, não crie contas com esse uid no VPS.
 4. **Coloque o seu domínio no Caddyfile.**
    ```sh
    sed -i 's/mosaic\.example\.com/SEU-DOMINIO/g' deploy/Caddyfile
