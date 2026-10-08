@@ -30,11 +30,13 @@ export class ApiError extends Error {
 
 // On these a 401 is an answer about the credentials typed in (or "not logged in yet"), not a
 // session that ended while the app was open, so it must not throw the user out of the editor.
-const OWN_401 = new Set(['/api/auth/login', '/api/auth/me', '/api/auth/password', '/api/auth/delete-account'])
+// Password change and account deletion answer a wrong password with invalid_credentials too, but
+// a dead session there is still unauthenticated, so those are told apart by code, not by path.
+const OWN_401 = new Set(['/api/auth/login', '/api/auth/me'])
 
 let onUnauthenticated: (() => void) | null = null
 
-/** Called on a 401 from any endpoint outside OWN_401, so the app can ask the user to log in again. */
+/** Called on a 401 other than invalid_credentials from any endpoint outside OWN_401, so the app can ask the user to log in again. */
 export function setOnUnauthenticated(callback: (() => void) | null): void {
   onUnauthenticated = callback
 }
@@ -77,8 +79,9 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
   }
 
   if (!res.ok) {
-    if (res.status === 401 && !OWN_401.has(path)) onUnauthenticated?.()
-    throw await errorFrom(res)
+    const error = await errorFrom(res)
+    if (res.status === 401 && !OWN_401.has(path) && error.code !== 'invalid_credentials') onUnauthenticated?.()
+    throw error
   }
   if (res.status === 204) return undefined as T
   try {

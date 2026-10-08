@@ -204,6 +204,18 @@ describe('onUnauthenticated', () => {
     expect(callback).not.toHaveBeenCalled()
   })
 
+  it('fires when the session died under password change or account deletion', async () => {
+    const callback = vi.fn()
+    setOnUnauthenticated(callback)
+    fetchMock.mockResolvedValueOnce(unauthenticated())
+    const e = await caught(authApi.changePassword({ currentPassword: 'old password', newPassword: 'new password' }))
+    expect(e.code).toBe('unauthenticated')
+    expect(callback).toHaveBeenCalledTimes(1)
+    fetchMock.mockResolvedValueOnce(unauthenticated())
+    await caught(authApi.deleteAccount({ password: 'old password' }))
+    expect(callback).toHaveBeenCalledTimes(2)
+  })
+
   it('does not fire on other errors', async () => {
     const callback = vi.fn()
     setOnUnauthenticated(callback)
