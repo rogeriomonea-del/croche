@@ -275,13 +275,25 @@ docker compose --profile caddy up -d --build      # sem Caddy: docker compose up
 docker image prune -f                             # remove as imagens antigas
 ```
 
-**Caminho B:**
+**Caminho B:** o build acontece na pasta de onde o serviço lê o código (o `npm ci` apaga o
+`node_modules` e o build esvazia o `dist/`), então o serviço para antes e o site fica fora do ar
+durante o build (alguns minutos num VPS pequeno).
 ```sh
 cd /opt/mosaic-crochet
 mosaic-cli db:backup /var/lib/mosaic-crochet/backups/antes-de-atualizar-$(date +%F-%H%M).db
+ANTERIOR=$(git rev-parse HEAD)                    # versão atual, para voltar se o build falhar
 git pull
+sudo systemctl stop mosaic-crochet
 npm ci && npm run build && npm prune --omit=dev
-sudo systemctl restart mosaic-crochet
+sudo systemctl start mosaic-crochet
+```
+Se o `npm ci` ou o build falhar (falta de memória, rede), não suba o serviço com o código pela
+metade. No mesmo terminal, volte para a versão anterior e builde de novo. O app novo não chegou a
+rodar, então o banco continua no formato que a versão anterior abre.
+```sh
+git reset --hard "$ANTERIOR"
+npm ci && npm run build && npm prune --omit=dev
+sudo systemctl start mosaic-crochet
 ```
 
 ## 8. PUBLIC_ORIGIN, COOKIE_SECURE e TRUST_PROXY
