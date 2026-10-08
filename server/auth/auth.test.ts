@@ -1,7 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DAY_MS } from '../context'
 import { get, makeApp, PASSWORD, postJson, sessionCookie, setCookies, type TestApp } from '../test/helpers'
+import { getDummyHash, verifyPassword } from './passwords'
 import { hashToken, SESSION_REFRESH_MS } from './sessions'
+
+// verifyPassword keeps its real behaviour; the spy only records who paid for an argon2 verify.
+vi.mock('./passwords', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./passwords')>()
+  return { ...actual, verifyPassword: vi.fn(actual.verifyPassword) }
+})
+
+// SPEC §9.2: argon2id, m = 19 MiB, t = 2, p = 1.
+const ARGON2ID_PREFIX = /^\$argon2id\$v=19\$m=19456,t=2,p=1\$/
+const CLEARED_HOST_COOKIE = /^__Host-mosaic_session=; Max-Age=0; Path=\/;.*HttpOnly.*Secure.*SameSite=Lax/
 
 let t: TestApp
 afterEach(async () => {
@@ -64,6 +75,15 @@ describe('POST /api/auth/signup', () => {
     // The cookie it set is the one it reads back.
     const me = await get(t.app, '/api/auth/me', sessionCookie(res))
     expect(me.statusCode).toBe(200)
+  })
+
+  it('hashes the password with argon2id at the SPEC parameters', async () => {
+    t = await makeApp({ allowSignup: true })
+    expect((await signup()).statusCode).toBe(201)
+    const { password_hash } = t.db.prepare('SELECT password_hash FROM users').get() as { password_hash: string }
+    expect(password_hash).toMatch(ARGON2ID_PREFIX)
+    // The dummy verify for unknown e-mails costs what a real one does.
+    expect(await getDummyHash()).toMatch(ARGON2ID_PREFIX)
   })
 
   it('stores only the SHA-256 of the session token', async () => {
@@ -142,6 +162,21 @@ describe('POST /api/auth/login', () => {
     expect(setCookies(unknown)).toEqual([])
   })
 
+  it('verifies against the dummy hash for an unknown e-mail, once, as for a known one', async () => {
+    t = await makeApp({ allowSignup: true })
+    await signup()
+    const verify = vi.mocked(verifyPassword)
+    const { password_hash } = t.db.prepare('SELECT password_hash FROM users').get() as { password_hash: string }
+
+    verify.mockClear()
+    expect((await login('nobody@example.com', PASSWORD)).statusCode).toBe(401)
+    expect(verify.mock.calls).toEqual([[await getDummyHash(), PASSWORD]])
+
+    verify.mockClear()
+    expect((await login('ro@example.com', 'wrong password!')).statusCode).toBe(401)
+    expect(verify.mock.calls).toEqual([[password_hash, 'wrong password!']])
+  })
+
   it('replaces the session the browser came in with', async () => {
     t = await makeApp({ allowSignup: true })
     const first = sessionCookie(await signup())
@@ -174,6 +209,14 @@ describe('GET /api/auth/me', () => {
     expect(setCookies(res)[0]).toMatch(/^mosaic_session=; Max-Age=0;/)
   })
 
+  it('clears a forged __Host- cookie with Secure when COOKIE_SECURE is on', async () => {
+    t = await makeApp({ cookieSecure: true })
+    const res = await get(t.app, '/api/auth/me', `__Host-mosaic_session=${'A'.repeat(43)}`)
+    expect(res.statusCode).toBe(401)
+    expect(setCookies(res)[0]).toMatch(CLEARED_HOST_COOKIE)
+    expect(setCookies(res)[0]).not.toMatch(/Domain=/i)
+  })
+
   it('returns the user for a live session', async () => {
     t = await makeApp({ allowSignup: true })
     const created = await signup()
@@ -194,6 +237,16 @@ describe('POST /api/auth/logout', () => {
     expect(setCookies(res)[0]).toMatch(/^mosaic_session=; Max-Age=0; Path=\/;/)
     expect(countSessions()).toBe(0)
     expect((await get(t.app, '/api/auth/me', cookie)).statusCode).toBe(401)
+  })
+
+  it('clears the __Host- cookie with Secure when COOKIE_SECURE is on', async () => {
+    t = await makeApp({ allowSignup: true, cookieSecure: true })
+    const cookie = sessionCookie(await signup())
+    const res = await postJson(t.app, '/api/auth/logout', {}, { cookie })
+    expect(res.statusCode).toBe(204)
+    expect(setCookies(res)[0]).toMatch(CLEARED_HOST_COOKIE)
+    expect(setCookies(res)[0]).not.toMatch(/Domain=/i)
+    expect(countSessions()).toBe(0)
   })
 
   it('is 204 without a session, with or without a JSON content type', async () => {
@@ -236,6 +289,25 @@ describe('session lifetime', () => {
     // Past the original 30 days, still signed in thanks to the renewal.
     t.clock.advance(2 * DAY_MS)
     expect((await get(t.app, '/api/auth/me', cookie)).statusCode).toBe(200)
+  })
+
+  it('follows a SESSION_TTL_DAYS other than the default for the cookie, the renewal and the expiry', async () => {
+    t = await makeApp({ allowSignup: true, sessionTtlDays: 7 })
+    const created = await signup()
+    expect(setCookies(created)[0]).toContain('Max-Age=604800')
+    const cookie = sessionCookie(created)
+
+    t.clock.advance(SESSION_REFRESH_MS + 1)
+    const renewed = await get(t.app, '/api/auth/me', cookie)
+    expect(renewed.statusCode).toBe(200)
+    expect(setCookies(renewed)[0]).toContain('Max-Age=604800')
+    const row = t.db.prepare('SELECT expires_at FROM sessions').get() as { expires_at: number }
+    expect(row.expires_at).toBe(t.clock.now + 7 * DAY_MS)
+
+    // Seven idle days after the renewal, the session is gone.
+    t.clock.advance(7 * DAY_MS)
+    expect((await get(t.app, '/api/auth/me', cookie)).statusCode).toBe(401)
+    expect(countSessions()).toBe(0)
   })
 
   it('purges expired sessions when the app starts', async () => {
@@ -355,5 +427,14 @@ describe('POST /api/auth/delete-account', () => {
     expect((await login('ro@example.com', PASSWORD, '10.0.0.4')).statusCode).toBe(401)
     // Nobody else is affected.
     expect((await get(t.app, '/api/auth/me', keeper)).statusCode).toBe(200)
+  })
+
+  it('clears the __Host- cookie with Secure when COOKIE_SECURE is on', async () => {
+    t = await makeApp({ allowSignup: true, cookieSecure: true })
+    const cookie = sessionCookie(await signup())
+    const res = await postJson(t.app, '/api/auth/delete-account', { password: PASSWORD }, { cookie })
+    expect(res.statusCode).toBe(204)
+    expect(setCookies(res)[0]).toMatch(CLEARED_HOST_COOKIE)
+    expect(setCookies(res)[0]).not.toMatch(/Domain=/i)
   })
 })
