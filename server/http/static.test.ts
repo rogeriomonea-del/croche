@@ -43,6 +43,15 @@ describe('static SPA', () => {
     expect(robots.headers['cache-control']).toBe('no-cache')
   })
 
+  it('does not count static files against the 300/min /api rate limit', async () => {
+    t = await makeApp({ staticDir: dir })
+    for (let i = 0; i < 301; i++) {
+      const res = await t.app.inject({ method: 'GET', url: '/assets/index-abc123.js', remoteAddress: '198.51.100.9' })
+      expect(res.statusCode).toBe(200)
+    }
+    expect((await t.app.inject({ method: 'GET', url: '/api/health', remoteAddress: '198.51.100.9' })).statusCode).toBe(200)
+  })
+
   it('falls back to index.html for client-side routes', async () => {
     t = await makeApp({ staticDir: dir })
     for (const url of ['/some/route', '/patterns/123?x=1']) {
