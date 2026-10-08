@@ -20,9 +20,10 @@ server {
 
 # HTTPS: termina o TLS e repassa tudo para o app em 127.0.0.1:3000.
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    # 'listen ... http2' e não 'http2 on;': esse só existe a partir do nginx 1.25.1, e o apt do
+    # Debian 12 e do Ubuntu 22.04/24.04 instala 1.18 a 1.24. No 1.25+ isto gera só um aviso.
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name mosaic.example.com;
 
     ssl_certificate     /etc/letsencrypt/live/mosaic.example.com/fullchain.pem;
