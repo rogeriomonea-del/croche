@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { cellsOf, COL_OPTIONS, emptyMatrix, resize, resolveClick, ROW_OPTIONS, stitchNumber, toCsv, toggle } from '.'
 
 describe('dimensions (§2)', () => {
-  it('offers odd row counts 5–51 and column counts 5–50', () => {
+  it('offers odd row counts 5–119 and column counts 5–120 (SPEC v0.2)', () => {
     expect(ROW_OPTIONS[0]).toBe(5)
-    expect(ROW_OPTIONS[ROW_OPTIONS.length - 1]).toBe(51)
+    expect(ROW_OPTIONS[ROW_OPTIONS.length - 1]).toBe(119)
     expect(ROW_OPTIONS.every((n) => n % 2 === 1)).toBe(true)
-    expect([COL_OPTIONS[0], COL_OPTIONS[COL_OPTIONS.length - 1], COL_OPTIONS.length]).toEqual([5, 50, 46])
+    expect([COL_OPTIONS[0], COL_OPTIONS[COL_OPTIONS.length - 1], COL_OPTIONS.length]).toEqual([5, 120, 116])
   })
 
   it('numbers chart columns from the right', () => {
@@ -50,11 +50,10 @@ describe('resolveClick (handleCellClick)', () => {
 })
 
 describe('toCsv', () => {
-  it('writes the X chart top row first, 1 = dc, under stitch numbers', () => {
+  it('writes the X chart top row first, 1 = dc, under stitch numbers, plain RFC 4180 (§9)', () => {
     const X = emptyMatrix(5, 5)
     X[2][0] = true // row 3, column 1 (stitch 5)
     expect(toCsv(X).split('\r\n')).toEqual([
-      'sep=,',
       'Row,Yarn,5,4,3,2,1',
       '5,A,0,0,0,0,0',
       '4,B,0,0,0,0,0',

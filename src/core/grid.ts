@@ -5,9 +5,9 @@
 export type Matrix = boolean[][]
 
 export const MIN_ROWS = 5
-export const MAX_ROWS = 51
+export const MAX_ROWS = 119
 export const MIN_COLS = 5
-export const MAX_COLS = 50
+export const MAX_COLS = 120
 
 function range(from: number, to: number): number[] {
   return Array.from({ length: to - from + 1 }, (_, i) => from + i)
