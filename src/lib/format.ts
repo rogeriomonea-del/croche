@@ -1,16 +1,3 @@
-/** A file name stem from a pattern name: ASCII lowercase words joined by '-', never empty. */
-export function fileSlug(name: string): string {
-  const slug = name
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)
-    .replace(/-+$/, '')
-  return slug || 'pattern'
-}
-
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR

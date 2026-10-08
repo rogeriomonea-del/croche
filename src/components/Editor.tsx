@@ -16,7 +16,8 @@ import {
   type DesignData,
   type View,
 } from '../core'
-import { fileSlug, formatUpdated } from '../lib/format'
+import { formatUpdated } from '../lib/format'
+import { fileSlug } from '../shared/filename'
 import type { Pattern, PatternSummary, RevisionConflictDetails, User } from '../shared/api'
 import { DEFAULT_NAME, designReducer, initialDesign } from '../state/design'
 import { AccountDialog } from './AccountDialog'
