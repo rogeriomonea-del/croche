@@ -12,7 +12,12 @@ export const NAME_MAX = 100
 const MAX_ERRORS = 20
 const HEX_COLOR = '^#[0-9a-fA-F]{6}$'
 const HEX_COLOR_RE = new RegExp(HEX_COLOR)
-const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/
+// Every Unicode control character (C0, DEL and C1): NEL or CSI would break lines or start
+// terminal escapes wherever the name is shown.
+const CONTROL_CHAR_RE = /\p{Cc}/u
+// In 'u' mode only an unpaired surrogate matches Cs. SQLite stores it as U+FFFD in the name
+// column while the JSON document keeps it, so the two copies of the name would disagree.
+const LONE_SURROGATE_RE = /\p{Cs}/u
 
 export interface PatternDocument {
   format: typeof DOCUMENT_FORMAT
@@ -82,6 +87,7 @@ function nameError(name: string): string | null {
   if (name.length === 0) return 'name: must not be empty'
   if (codePointLength(name, NAME_MAX) > NAME_MAX) return `name: must be at most ${NAME_MAX} characters`
   if (CONTROL_CHAR_RE.test(name)) return 'name: must not contain control characters'
+  if (LONE_SURROGATE_RE.test(name)) return 'name: must not contain unpaired surrogates'
   return null
 }
 
@@ -216,7 +222,7 @@ export const PATTERN_DOCUMENT_SCHEMA = {
     name: {
       type: 'string',
       minLength: 1,
-      description: `1–${NAME_MAX} characters after trimming, no control characters (U+0000–U+001F, U+007F).`,
+      description: `1–${NAME_MAX} characters after trimming, no control characters (U+0000–U+001F, U+007F–U+009F), no unpaired surrogates.`,
     },
     rows: { type: 'integer', minimum: MIN_ROWS, maximum: MAX_ROWS, not: { multipleOf: 2 }, description: 'Odd, so the piece starts and ends in color A.' },
     cols: { type: 'integer', minimum: MIN_COLS, maximum: MAX_COLS },
