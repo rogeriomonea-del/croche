@@ -13,6 +13,7 @@ import { ApiError, registerErrorHandler } from './http/errors'
 import { registerJsonOnly } from './http/json'
 import { isApiPath, registerSecurity } from './http/security'
 import { registerStatic } from './http/static'
+import { registerPatternRoutes } from './patterns/routes'
 
 export const BODY_LIMIT = 256 * 1024
 const PURGE_INTERVAL_MS = 60 * 60 * 1000
@@ -75,6 +76,7 @@ export async function buildApp({ config, db, now = Date.now }: BuildAppOptions):
     return { ok: true }
   })
   registerAuthRoutes(app, ctx)
+  await registerPatternRoutes(app, ctx)
   await registerStatic(app, config)
 
   const purge = () => {
