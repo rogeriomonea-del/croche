@@ -1,0 +1,46 @@
+# Uso: docs/DEPLOY.md (caminho A). Só o app: `docker compose up -d --build`.
+# Com HTTPS automático pelo Caddy: `docker compose --profile caddy up -d --build`.
+# O driver json-file padrão do Docker não tem limite de tamanho, e o app loga duas linhas por
+# requisição (inclusive o healthcheck a cada 30 s): sem rotação o disco do VPS acaba enchendo.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  app:
+    build: .
+    image: mosaic-crochet:latest
+    env_file: .env
+    volumes:
+      # Banco SQLite e backups ficam em ./data no host (dono: uid 1000, o usuário 'node' da imagem).
+      - ./data:/data
+    ports:
+      # Só a própria máquina alcança o app; o acesso público passa pelo Caddy ou pelo nginx.
+      - '127.0.0.1:3000:3000'
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2
+    profiles: ['caddy']
+    depends_on:
+      - app
+    # Rede do host, e não portas publicadas: a rede padrão do compose é só IPv4, e o Docker repassa
+    # quem chega por IPv6 com o IP do gateway (172.x.0.1). Todo visitante IPv6 dividiria um único
+    # limite de requisições e de logins. Aqui o Caddy escuta direto nas portas 80/443 do VPS.
+    network_mode: host
+    environment:
+      # Endereço do site no Caddyfile; vem do .env, o mesmo que o app usa.
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?defina PUBLIC_ORIGIN no .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:
