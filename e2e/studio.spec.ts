@@ -190,6 +190,24 @@ test('one drag paints a continuous stroke and undo restores the whole gesture', 
   await page.getByRole('button', { name: 'Enquadrar tecido', exact: true }).click()
 })
 
+test('a vertical simulation stroke paints one yarn instead of inverting the stripes', async ({ page }) => {
+  await enterStudio(page)
+  await importDocument(page, blankDocument())
+  await cell(page, 3, 5).hover()
+  const start = await cell(page, 3, 5).boundingBox()
+  const end = await cell(page, 8, 5).boundingBox()
+  expect(start).not.toBeNull()
+  expect(end).not.toBeNull()
+  await page.mouse.move(start!.x + start!.width / 2, start!.y + start!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(end!.x + end!.width / 2, end!.y + end!.height / 2, { steps: 3 })
+  await page.mouse.up()
+  const document = await exportDocument(page)
+  // Rows 3, 5 and 7 are worked in A, so only they deviate to show B; rows 4, 6 and 8 already are B.
+  expect([3, 4, 5, 6, 7, 8].map((row) => document.cells[row - 1][4]).join('')).toBe('101010')
+  expect(document.derived?.conflicts).toEqual([])
+})
+
 test('save, reload, reopen and revision-conflict resolution use the real API', async ({ page }) => {
   await enterStudio(page)
   await importDocument(page, blankDocument('Saved woven study'))

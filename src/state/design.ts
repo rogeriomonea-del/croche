@@ -1,4 +1,4 @@
-import { emptyMatrix, resize, toggle, type DesignData, type Matrix, type Yarn } from '../core'
+import { emptyMatrix, resize, stripe, toggle, type DesignData, type Matrix, type Yarn } from '../core'
 
 export const DEFAULT_NAME = 'Novo padrão'
 
@@ -9,9 +9,15 @@ export interface Design {
   colors: Record<Yarn, string>
 }
 
+/**
+ * What a stroke writes into each cell it crosses: a boolean sets the deviation itself (the chart's
+ * X on or off, or an erase), a yarn makes each cell show that yarn whatever its row's stripe.
+ */
+export type PaintValue = boolean | Yarn
+
 export type DesignAction =
   | { type: 'toggle'; r: number; c: number }
-  | { type: 'paint'; cells: { r: number; c: number }[]; value: boolean }
+  | { type: 'paint'; cells: { r: number; c: number }[]; value: PaintValue }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'setColor'; yarn: Yarn; color: string }
   | { type: 'swapColors' }
@@ -32,7 +38,8 @@ export function designReducer(state: Design, action: DesignAction): Design {
       // protected edge rows cannot be changed by any tool, including an erase stroke.
       let delta = state.delta
       for (const { r, c } of action.cells) {
-        if (delta[r - 1]?.[c - 1] !== undefined && delta[r - 1][c - 1] !== action.value) {
+        const deviates = typeof action.value === 'boolean' ? action.value : action.value !== stripe(r)
+        if (delta[r - 1]?.[c - 1] !== undefined && delta[r - 1][c - 1] !== deviates) {
           delta = toggle(delta, r, c)
         }
       }

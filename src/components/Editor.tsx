@@ -40,7 +40,7 @@ import {
 import { formatUpdated } from '../lib/format'
 import { fileSlug } from '../shared/filename'
 import type { Pattern, PatternSummary, RevisionConflictDetails, User } from '../shared/api'
-import { DEFAULT_NAME, initialDesign } from '../state/design'
+import { DEFAULT_NAME, initialDesign, type PaintValue } from '../state/design'
 import { historyReducer, initialHistory } from '../state/history'
 import { Brand } from './Brand'
 import { TemplateGallery } from './TemplateGallery'
@@ -389,7 +389,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   )
 
   const handlePaintCells = useCallback(
-    (cells: { r: number; c: number }[], value: boolean) => {
+    (cells: { r: number; c: number }[], value: PaintValue) => {
       const resolved: { r: number; c: number }[] = []
       for (const cell of cells) {
         const target = resolveClick(view, cell.r, cell.c, rows)

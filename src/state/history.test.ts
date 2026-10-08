@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deriveX, resolveClick } from '../core'
+import { cellsOf, cellYarn, conflicts, deriveX, otherYarn, resolveClick } from '../core'
 import { historyReducer, initialHistory } from './history'
 
 describe('studio gesture history', () => {
@@ -46,6 +46,21 @@ describe('studio gesture history', () => {
     expect(state.present.delta[5][3]).toBe(true)
     expect(state.present.delta[6][3]).toBe(false)
     expect(deriveX(state.present.delta)[6][3]).toBe(true)
+  })
+  it('paints one yarn when a simulation stroke crosses rows, without conflicts', () => {
+    const column = [3, 4, 5, 6, 7, 8].map((r) => resolveClick('simulation', r, 5, 15))
+    const cells = column.map((target) => {
+      if (!target.ok) throw Error('Expected editable cell')
+      return target
+    })
+    const yarn = otherYarn(cellYarn(initialHistory.present.delta, 3, 5))
+    let state = historyReducer(initialHistory, { type: 'strokeStart' })
+    state = historyReducer(state, { type: 'paint', cells: cells.slice(0, 3), value: yarn })
+    state = historyReducer(state, { type: 'paint', cells: cells.slice(2), value: yarn })
+    state = historyReducer(state, { type: 'strokeEnd' })
+    expect(cells.map(({ r, c }) => cellYarn(state.present.delta, r, c))).toEqual(Array(6).fill('pattern'))
+    expect(cellsOf(conflicts(deriveX(state.present.delta)))).toEqual([])
+    expect(state.past).toHaveLength(1)
   })
   it('clears redo on a fresh edit and resets history when opening another document', () => {
     let state = historyReducer(initialHistory, { type: 'toggle', r: 4, c: 2 })

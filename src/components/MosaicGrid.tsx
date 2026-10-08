@@ -25,6 +25,7 @@ import {
   type Yarn,
 } from '../core'
 import { stitchLine, zoomAt, type CanvasCell } from '../lib/canvas'
+import type { PaintValue } from '../state/design'
 import './canvas.css'
 
 const CELL = 27
@@ -43,7 +44,7 @@ interface MosaicGridProps {
   colors: Record<Yarn, string>
   onCellClick: (r: number, c: number) => void
   /** Visible coordinates; the editor resolves them through resolveClick before changing delta. */
-  onPaintCells?: (cells: CanvasCell[], value: boolean) => void
+  onPaintCells?: (cells: CanvasCell[], value: PaintValue) => void
   onStrokeStart?: () => void
   onStrokeEnd?: () => void
 }
@@ -310,7 +311,7 @@ export function MosaicGrid({
   const gesture = useRef<
     | null
     | { kind: 'pan'; x: number; y: number; offsetX: number; offsetY: number }
-    | { kind: 'paint'; last: CanvasCell; seen: Set<string>; value: boolean }
+    | { kind: 'paint'; last: CanvasCell; seen: Set<string>; value: PaintValue }
   >(null)
   const queued = useRef<CanvasCell[]>([])
   const frame = useRef<number | null>(null)
@@ -471,7 +472,14 @@ export function MosaicGrid({
       kind: 'paint',
       last: cell,
       seen: new Set(),
-      value: tool === 'erase' ? false : !delta[target.r - 1][target.c - 1],
+      // Simulation paints the colour the first cell did not show, so a stroke across rows draws one
+      // yarn; the chart places or removes X. Either way the stroke never flips cells it re-crosses.
+      value:
+        tool === 'erase'
+          ? false
+          : view === 'simulation'
+            ? otherYarn(cellYarn(delta, target.r, target.c))
+            : !delta[target.r - 1][target.c - 1],
     }
     paint(cell)
   }
