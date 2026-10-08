@@ -21,7 +21,7 @@ export default function App() {
         setSession(
           e instanceof ApiError && e.status === 401
             ? { status: 'ready', user: null }
-            : { status: 'unreachable', message: e instanceof Error ? e.message : 'Something went wrong.' },
+            : { status: 'unreachable', message: e instanceof Error ? e.message : 'Algo deu errado. Tente novamente.' },
         ),
     )
   }

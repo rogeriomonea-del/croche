@@ -67,7 +67,7 @@ describe('request', () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     const e = await caught(authApi.me())
     expect([e.status, e.code]).toEqual([0, 'internal'])
-    expect(e.message).toMatch(/could not reach the server/i)
+    expect(e.message).toMatch(/Não foi possível falar com o servidor/)
   })
 
   it('reports an error that is not JSON as internal, naming the status', async () => {
@@ -75,6 +75,21 @@ describe('request', () => {
     const e = await caught(patternsApi.list())
     expect([e.status, e.code]).toEqual([502, 'internal'])
     expect(e.message).toContain('502 Bad Gateway')
+    expect(e.message).toMatch(/^O servidor respondeu com um erro inesperado/)
+  })
+
+  it('words the generic server errors in Portuguese and keeps their codes', async () => {
+    const cases = [
+      [429, 'rate_limited', 'Too many requests; try again later', /Muitas tentativas/],
+      [403, 'bad_origin', 'Request origin is not allowed', /endereço oficial/],
+      [500, 'internal', 'Internal server error', /erro inesperado/],
+    ] as const
+    for (const [status, code, message, expected] of cases) {
+      fetchMock.mockResolvedValue(json(status, { error: { code, message } }))
+      const e = await caught(patternsApi.list())
+      expect([e.status, e.code]).toEqual([status, code])
+      expect(e.message).toMatch(expected)
+    }
   })
 
   it('reports JSON without the envelope as internal', async () => {

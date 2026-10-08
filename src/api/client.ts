@@ -49,6 +49,16 @@ function isErrorBody(body: unknown): body is ApiErrorBody {
   return typeof code === 'string' && typeof message === 'string'
 }
 
+/**
+ * The server words its errors in English. These codes reach the pt-BR interface without a
+ * screen-specific text, so the client words them; the codes the screens handle keep the server text.
+ */
+const LOCAL_MESSAGES: Partial<Record<ApiErrorCode, string>> = {
+  rate_limited: 'Muitas tentativas em pouco tempo. Aguarde um minuto e tente novamente.',
+  bad_origin: 'O servidor recusou esta página. Abra o ateliê pelo endereço oficial e tente novamente.',
+  internal: 'O servidor encontrou um erro inesperado. Tente novamente em instantes.',
+}
+
 async function errorFrom(res: Response): Promise<ApiError> {
   let body: unknown
   try {
@@ -56,9 +66,12 @@ async function errorFrom(res: Response): Promise<ApiError> {
   } catch {
     body = undefined
   }
-  if (isErrorBody(body)) return new ApiError(res.status, body.error.code, body.error.message, body.error.details)
+  if (isErrorBody(body)) {
+    const { code, message, details } = body.error
+    return new ApiError(res.status, code, LOCAL_MESSAGES[code] ?? message, details)
+  }
   const reason = res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`
-  return new ApiError(res.status, 'internal', `The server answered with an unexpected error (${reason}).`)
+  return new ApiError(res.status, 'internal', `O servidor respondeu com um erro inesperado (${reason}). Tente novamente em instantes.`)
 }
 
 async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
@@ -75,7 +88,7 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
   try {
     res = await fetch(path, init)
   } catch {
-    throw new ApiError(0, 'internal', 'Could not reach the server. Check your connection and try again.')
+    throw new ApiError(0, 'internal', 'Não foi possível falar com o servidor. Verifique sua conexão e tente novamente.')
   }
 
   if (!res.ok) {
@@ -87,7 +100,7 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: strin
   try {
     return (await res.json()) as T
   } catch {
-    throw new ApiError(res.status, 'internal', 'The server sent a response that could not be read.')
+    throw new ApiError(res.status, 'internal', 'O servidor enviou uma resposta que não pôde ser lida. Tente novamente.')
   }
 }
 
