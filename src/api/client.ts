@@ -1,0 +1,119 @@
+// Typed client for the backend (SPEC §9.4): same origin, cookie session, JSON in and out.
+import type {
+  ApiErrorBody,
+  ApiErrorCode,
+  AuthConfig,
+  ChangePasswordRequest,
+  CreatePatternRequest,
+  Credentials,
+  DeleteAccountRequest,
+  Pattern,
+  PatternSummary,
+  UpdatePatternRequest,
+  User,
+} from '../shared/api'
+
+/** Any failed request. Network failures and unreadable answers carry code 'internal' (status 0 = no answer). */
+export class ApiError extends Error {
+  readonly status: number
+  readonly code: ApiErrorCode
+  readonly details: unknown
+
+  constructor(status: number, code: ApiErrorCode, message: string, details?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.details = details
+  }
+}
+
+// On these a 401 is an answer about the credentials typed in (or "not logged in yet"), not a
+// session that ended while the app was open, so it must not throw the user out of the editor.
+const OWN_401 = new Set(['/api/auth/login', '/api/auth/me', '/api/auth/password', '/api/auth/delete-account'])
+
+let onUnauthenticated: (() => void) | null = null
+
+/** Called on a 401 from any endpoint outside OWN_401, so the app can ask the user to log in again. */
+export function setOnUnauthenticated(callback: (() => void) | null): void {
+  onUnauthenticated = callback
+}
+
+function isErrorBody(body: unknown): body is ApiErrorBody {
+  if (typeof body !== 'object' || body === null) return false
+  const error = (body as { error?: unknown }).error
+  if (typeof error !== 'object' || error === null) return false
+  const { code, message } = error as { code?: unknown; message?: unknown }
+  return typeof code === 'string' && typeof message === 'string'
+}
+
+async function errorFrom(res: Response): Promise<ApiError> {
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    body = undefined
+  }
+  if (isErrorBody(body)) return new ApiError(res.status, body.error.code, body.error.message, body.error.details)
+  const reason = res.statusText ? `${res.status} ${res.statusText}` : `${res.status}`
+  return new ApiError(res.status, 'internal', `The server answered with an unexpected error (${reason}).`)
+}
+
+async function request<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  const init: RequestInit = { method, credentials: 'same-origin', headers }
+  // Every mutating request is JSON, even with nothing to say: the server answers 415 otherwise
+  // (SPEC §9.3), and an empty body under that content type is a parse error.
+  if (method !== 'GET') {
+    headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body ?? {})
+  }
+
+  let res: Response
+  try {
+    res = await fetch(path, init)
+  } catch {
+    throw new ApiError(0, 'internal', 'Could not reach the server. Check your connection and try again.')
+  }
+
+  if (!res.ok) {
+    if (res.status === 401 && !OWN_401.has(path)) onUnauthenticated?.()
+    throw await errorFrom(res)
+  }
+  if (res.status === 204) return undefined as T
+  try {
+    return (await res.json()) as T
+  } catch {
+    throw new ApiError(res.status, 'internal', 'The server sent a response that could not be read.')
+  }
+}
+
+export const authApi = {
+  config: () => request<AuthConfig>('GET', '/api/auth/config'),
+  signup: (credentials: Credentials) =>
+    request<{ user: User }>('POST', '/api/auth/signup', credentials).then((r) => r.user),
+  login: (credentials: Credentials) => request<{ user: User }>('POST', '/api/auth/login', credentials).then((r) => r.user),
+  logout: () => request<void>('POST', '/api/auth/logout'),
+  me: () => request<{ user: User }>('GET', '/api/auth/me').then((r) => r.user),
+  changePassword: (body: ChangePasswordRequest) => request<void>('POST', '/api/auth/password', body),
+  deleteAccount: (body: DeleteAccountRequest) => request<void>('POST', '/api/auth/delete-account', body),
+}
+
+/** The per-field messages of a 400 invalid_input (SPEC §9.4), or [] when there are none. */
+export function inputErrors(details: unknown): string[] {
+  const fields = (details as { fields?: unknown } | undefined)?.fields
+  if (typeof fields !== 'object' || fields === null) return []
+  return Object.values(fields).filter((v): v is string => typeof v === 'string')
+}
+
+const patternPath = (id: string) => `/api/patterns/${encodeURIComponent(id)}`
+
+export const patternsApi = {
+  /** Newest first. */
+  list: () => request<{ patterns: PatternSummary[] }>('GET', '/api/patterns').then((r) => r.patterns),
+  get: (id: string) => request<{ pattern: Pattern }>('GET', patternPath(id)).then((r) => r.pattern),
+  create: (body: CreatePatternRequest) => request<{ pattern: Pattern }>('POST', '/api/patterns', body).then((r) => r.pattern),
+  update: (id: string, body: UpdatePatternRequest) =>
+    request<{ pattern: Pattern }>('PUT', patternPath(id), body).then((r) => r.pattern),
+  remove: (id: string) => request<void>('DELETE', patternPath(id)),
+}
