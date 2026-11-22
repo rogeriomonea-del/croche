@@ -456,6 +456,9 @@ test('a local PNG becomes a configurable conflict-free mosaic with derived writt
   const original = dialog.getByRole('img', { name: 'Fotografia original selecionada' })
   const preview = dialog.getByRole('img', { name: 'Prévia do mosaico convertido' })
   await expect(preview).toBeVisible()
+  // The woven checkerboard reads as a regular chart; this test covers the free photo reading.
+  await dialog.getByRole('button', { name: 'Ler como foto', exact: true }).click()
+  await expect(dialog.getByRole('slider', { name: /^Contraste/ })).toBeVisible()
   await expect(original).toHaveAttribute('width', '320')
   await expect(original).toHaveAttribute('height', '240')
   expect(await original.evaluate((element) => {
@@ -493,6 +496,110 @@ test('a local PNG becomes a configurable conflict-free mosaic with derived writt
   expect([document.rows, document.cols]).toEqual([31, 40])
   expectValidStitches(document)
   expect(requests).toEqual([])
+})
+
+/** A 40 x 15 two-colour chart screenshot: margins, grid lines (thicker every 10), axis-number blobs and a watermark. */
+async function renderChartScreenshot(page: Page): Promise<Buffer> {
+  const dataUrl = await page.evaluate(() => {
+    const cols = 40, rows = 15, cell = 17, left = 64, top = 46, right = 38, bottom = 52
+    const canvas = document.createElement('canvas')
+    canvas.width = left + cols * cell + right
+    canvas.height = top + rows * cell + bottom
+    const g = canvas.getContext('2d')!
+    g.fillStyle = '#ffffff'
+    g.fillRect(0, 0, canvas.width, canvas.height)
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const diamond = Math.abs(j % 10 - 4.5) + Math.abs(i - 7) < 5.5
+        const ink = (diamond && (i + j) % 3 !== 0) || i === 0 || i === rows - 1 || (j * 7 + i * 3) % 23 === 0
+        g.fillStyle = ink ? '#c0392b' : '#ffffff'
+        g.fillRect(left + j * cell, top + i * cell, cell, cell)
+      }
+    }
+    for (let k = 0; k <= cols; k++) {
+      g.fillStyle = k % 10 === 0 ? '#555555' : '#b5b5b5'
+      g.fillRect(left + k * cell - (k % 10 === 0 ? 1 : 0), top, k % 10 === 0 ? 2 : 1, rows * cell)
+    }
+    for (let k = 0; k <= rows; k++) {
+      g.fillStyle = k % 10 === 0 || k === rows ? '#555555' : '#b5b5b5'
+      g.fillRect(left, top + k * cell - (k % 10 === 0 || k === rows ? 1 : 0), cols * cell, k % 10 === 0 || k === rows ? 2 : 1)
+    }
+    g.fillStyle = '#333333'
+    for (let i = 0; i < rows; i += 2) g.fillRect(left - 30 + (i % 4) * 2, top + i * cell + 4, 14 - (i % 4) * 2, 9)
+    for (let j = 0; j < cols; j += 5) g.fillRect(left + j * cell + 3, top + rows * cell + 12, 11, 9)
+    g.fillStyle = '#e4e4e4'
+    g.fillRect(left + 120, top + rows * cell + 32, 300, 10)
+    return canvas.toDataURL('image/png')
+  })
+  return Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64')
+}
+
+test('a chart screenshot is read cell by cell and adapted to the mosaic rules', async ({ page }) => {
+  await enterStudio(page)
+  const chart = await renderChartScreenshot(page)
+  const launch = page.getByRole('button', { name: 'Converter foto em pontos', exact: true })
+  const dialog = page.getByRole('dialog', { name: 'Da fotografia ao fio.' })
+  const preview = dialog.getByRole('img', { name: 'Prévia do mosaico convertido' })
+  const noConflicts = dialog.getByText('Sem conflitos de pontos', { exact: true })
+
+  await launch.click()
+  await dialog.getByLabel('Selecionar foto de crochê', { exact: true }).setInputFiles({ name: 'grafico-file.png', mimeType: 'image/png', buffer: chart })
+  await expect(dialog.getByText('Gráfico detectado: 40 × 15 quadradinhos', { exact: true })).toBeVisible()
+  await expect(preview).toHaveAttribute('viewBox', '0 0 40 17')
+  await expect(noConflicts).toBeVisible()
+  await expect(dialog.getByRole('combobox', { name: 'Carreiras', exact: true })).toHaveValue('17')
+  await expect(dialog.getByRole('combobox', { name: 'Pontos por carreira', exact: true })).toHaveValue('40')
+  await expect(dialog.getByText(/^O mosaico overlay adapta o gráfico às regras de pontos altos/)).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Abrir no Estúdio de filé' })).toBeVisible()
+  await expect(dialog.getByRole('slider', { name: /^Sensibilidade/ })).toBeVisible()
+  await expect(dialog.getByRole('slider', { name: /^Contraste/ })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '1 carreira por linha', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const detectedPath = await preview.locator('path').getAttribute('d')
+  await dialog.getByRole('slider', { name: /^Sensibilidade/ }).fill('100')
+  await expect(preview.locator('path')).not.toHaveAttribute('d', detectedPath!)
+  await dialog.getByRole('slider', { name: /^Sensibilidade/ }).fill('0')
+  await expect(preview.locator('path')).toHaveAttribute('d', detectedPath!)
+  // An upside-down chart can be turned before it becomes a mosaic; the reference turns with it.
+  const rotate = dialog.getByRole('button', { name: 'Girar 180°', exact: true })
+  await expect(rotate).toHaveAttribute('aria-pressed', 'false')
+  await rotate.click()
+  await expect(rotate).toHaveAttribute('aria-pressed', 'true')
+  await expect(preview.locator('path')).not.toHaveAttribute('d', detectedPath!)
+  await expect(dialog.getByRole('img', { name: 'Fotografia original selecionada, girada 180°', exact: true })).toBeVisible()
+  await rotate.click()
+  await expect(preview.locator('path')).toHaveAttribute('d', detectedPath!)
+
+  // A manual size resamples the chart; the detected size comes back with one click.
+  await dialog.getByRole('combobox', { name: 'Carreiras', exact: true }).selectOption('21')
+  await expect(preview).toHaveAttribute('viewBox', '0 0 40 21')
+  await expect(dialog.getByRole('button', { name: '2 carreiras por linha', exact: true })).toHaveCount(0)
+  await dialog.getByRole('button', { name: 'Usar tamanho do gráfico', exact: true }).click()
+  await expect(preview).toHaveAttribute('viewBox', '0 0 40 17')
+  await dialog.evaluate((element) => element.scrollTo({ top: 0 }))
+  await page.screenshot({ path: join(artifactDirectory, 'mosaic-from-chart.png'), fullPage: false })
+  await dialog.getByRole('button', { name: 'Usar este mosaico', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  const single = await exportDocument(page)
+  expect([single.rows, single.cols]).toEqual([17, 40])
+  expectValidStitches(single)
+
+  await launch.click()
+  await dialog.getByLabel('Selecionar foto de crochê', { exact: true }).setInputFiles({ name: 'grafico-file.png', mimeType: 'image/png', buffer: chart })
+  await expect(preview).toHaveAttribute('viewBox', '0 0 40 17')
+  await dialog.getByRole('button', { name: '2 carreiras por linha', exact: true }).click()
+  await expect(preview).toHaveAttribute('viewBox', '0 0 40 33')
+  await expect(dialog.getByRole('combobox', { name: 'Carreiras', exact: true })).toHaveValue('33')
+  await expect(noConflicts).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectViewportContained(page)
+  await dialog.evaluate((element) => element.scrollTo({ top: 0 }))
+  await page.screenshot({ path: join(artifactDirectory, 'mosaic-from-chart-mobile.png'), fullPage: false })
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await dialog.getByRole('button', { name: 'Usar este mosaico', exact: true }).click()
+  await expect(dialog).not.toBeVisible()
+  const double = await exportDocument(page)
+  expect([double.rows, double.cols]).toEqual([33, 40])
+  expectValidStitches(double)
 })
 
 test('invalid photos are rejected and cancelling conversion preserves the unsaved drawing', async ({ page }) => {

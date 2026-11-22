@@ -8,6 +8,7 @@ import {
   Plus,
   Eye,
   Grid3x3,
+  Rows3,
   Leaf,
   LoaderCircle,
   Lock,
@@ -20,7 +21,7 @@ import {
   UserRound,
   X as Close,
 } from 'lucide-react'
-import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react'
 import { ApiError, authApi, patternsApi } from '../api/client'
 import {
   cellsOf,
@@ -45,11 +46,32 @@ import { historyReducer, initialHistory } from '../state/history'
 import { Brand } from './Brand'
 import { TemplateGallery } from './TemplateGallery'
 import { PhotoPatternDialog } from './PhotoPatternDialog'
+import { FileStudioBoundary } from './file/FileStudioBoundary'
+import { failedImportUrl, freshUrl, relinkFailedStylesheets } from './file/retry-import'
+import type { ImportSeed } from './file/FileImport'
+import './file/file-card.css'
 import { AccountDialog } from './AccountDialog'
 import { InstructionsPanel } from './InstructionsPanel'
 import { LibraryPanel } from './LibraryPanel'
 import { MosaicGrid } from './MosaicGrid'
 import { Toolbar } from './Toolbar'
+
+// The filet studio (chart vision, canvas, reader) loads only when opened.
+let fileStudioRetries = 0
+
+async function importFileStudio(retry: boolean): Promise<typeof import('./file/FileStudio')> {
+  try {
+    return await import('./file/FileStudio')
+  } catch (error) {
+    // The browser keeps a failed fetch for its URL: on a retry, ask for the same file anew.
+    const url = retry ? failedImportUrl(error) : null
+    if (!url) throw error
+    return import(/* @vite-ignore */ freshUrl(url, ++fileStudioRetries))
+  }
+}
+
+/** The filet studio, loaded on demand. React keeps a failed import: each retry is a new lazy component. */
+const lazyFileStudio = (retry = false) => lazy(() => importFileStudio(retry).then((m) => ({ default: m.FileStudio })))
 
 const HINT: Record<View, string> = {
   simulation: 'Clique para trocar a cor. O ponto alto correspondente é calculado na carreira acima.',
@@ -130,6 +152,18 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [accountOpen, setAccountOpen] = useState(false)
   const [creationPanel, setCreationPanel] = useState<'templates' | 'photo' | null>(null)
+  const [fileStudioOpen, setFileStudioOpen] = useState(false)
+  /** A picture handed over by the photo converter: the studio opens on its import with it. */
+  const [fileStudioSeed, setFileStudioSeed] = useState<ImportSeed | null>(null)
+  const [FileStudio, setFileStudio] = useState(() => lazyFileStudio())
+  const [fileStudioAttempt, setFileStudioAttempt] = useState(0)
+
+  /** After the studio failed to load: the next opening fetches what failed anew. */
+  function reloadFileStudio() {
+    relinkFailedStylesheets(document, ++fileStudioRetries)
+    setFileStudio(() => lazyFileStudio(true))
+    setFileStudioAttempt((n) => n + 1)
+  }
 
   // Bumped whenever another pattern takes over the editor, so a save still in flight for the old
   // one cannot stamp its id and revision onto the new one.
@@ -521,6 +555,24 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
             </span>
             <ArrowUpRight size={19} />
           </button>
+          <button
+            className="creation-card file-card"
+            onClick={() => {
+              setFileStudioSeed(null)
+              setFileStudioOpen(true)
+            }}
+            aria-label="Abrir estúdio de filé"
+          >
+            <span className="creation-card-icon">
+              <Rows3 size={22} strokeWidth={1.3} />
+            </span>
+            <span>
+              <span className="creation-kicker">CROCHÊ FILÉ</span>
+              <strong>Leia carreira por carreira.</strong>
+              <small>Gráfico fiel e leitura guiada, sem tirar os olhos do fio.</small>
+            </span>
+            <ArrowUpRight size={19} />
+          </button>
           <button className="creation-blank" onClick={handleNew} aria-label="Criar padrão em branco">
             <Plus size={20} strokeWidth={1.4} />
             <span>
@@ -770,7 +822,26 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
           colors={design.colors}
           onClose={() => setCreationPanel(null)}
           onApply={applyCreation}
+          onOpenFileStudio={(seed) => {
+            setCreationPanel(null)
+            setFileStudioSeed(seed)
+            setFileStudioOpen(true)
+          }}
         />
+      )}
+      {fileStudioOpen && (
+        <FileStudioBoundary
+          key={fileStudioAttempt}
+          onRetry={reloadFileStudio}
+          onClose={() => {
+            reloadFileStudio()
+            setFileStudioOpen(false)
+          }}
+        >
+          <Suspense fallback={null}>
+            <FileStudio initialImport={fileStudioSeed ?? undefined} onClose={() => setFileStudioOpen(false)} />
+          </Suspense>
+        </FileStudioBoundary>
       )}
       <AnimatePresence>
         {accountOpen && (
