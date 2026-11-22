@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { analyzeChartImage, detectGrid } from './index'
 import { photograph, randomTruth, renderChart, rotation } from './fixtures'
+import { detectStraight } from './grid'
+import { luminance, opaque } from './image'
 import * as warp from './warp'
 
 vi.mock('./warp', async (original) => {
@@ -30,10 +32,14 @@ describe('straight lattices skip the photo model when they fit exactly', () => {
   })
 
   it('still tries the photo model when the lines drift along their length (a slight tilt)', () => {
-    const { image } = jittered(0.2)
+    const { truth, image } = jittered(0.2)
+    const flat = opaque(image)
+    expect(detectStraight(luminance(flat), flat.width, flat.height, false)?.fit?.skew).toBeGreaterThan(0.1)
     vi.mocked(warp.detectWarped).mockClear()
     const grid = detectGrid(image)
-    expect(grid?.fit?.skew).toBeGreaterThan(0.1)
     expect(warp.detectWarped).toHaveBeenCalled()
+    // A skewed straight lattice never wins over the photo model.
+    expect(grid?.mesh).toBeDefined()
+    expect(analyzeChartImage(image).ink).toEqual(truth)
   })
 })

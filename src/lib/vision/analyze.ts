@@ -273,14 +273,32 @@ export function analyzeChartImage(image: RgbaImage, options: AnalyzeOptions = {}
       grid.x.count <= MAX_COUNT &&
       grid.y.count <= MAX_COUNT
     if (fits) return gridResult(grid)
-  } else if (!options.forceResample && forcedCols !== undefined && forcedRows !== undefined) {
-    // Known counts, no grid found: fit a lattice of exactly those counts to the line evidence.
-    const fitted = fitKnownCounts(luminance(flat), flat.width, flat.height, findContentBox(flat), forcedCols, forcedRows)
-    if (fitted && fitted.confidence > 0) return gridResult(fitted)
+  }
+  if (!options.forceResample && forcedCols !== undefined && forcedRows !== undefined) {
+    // Known counts and no grid found, or a grid of other counts (the user corrects the size): fit a
+    // lattice of exactly those counts to the line evidence, inside the content or inside the grid
+    // found widened by about a pitch per side (it may have lost or gained outer rows).
+    const L = luminance(flat)
+    const boxes = [findContentBox(flat)]
+    if (grid) {
+      const box = gridBox(grid, flat)
+      const x0 = Math.max(0, Math.floor(box.x - grid.x.pitch))
+      const y0 = Math.max(0, Math.floor(box.y - grid.y.pitch))
+      const x1 = Math.min(flat.width, Math.ceil(box.x + box.width + grid.x.pitch))
+      const y1 = Math.min(flat.height, Math.ceil(box.y + box.height + grid.y.pitch))
+      boxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+    }
+    let fitted: DetectedGrid | null = null
+    for (const box of boxes) {
+      const fit = fitKnownCounts(L, flat.width, flat.height, box, forcedCols, forcedRows)
+      if (fit && fit.confidence > 0 && (!fitted || fit.confidence > fitted.confidence)) fitted = fit
+    }
+    if (fitted) return gridResult(fitted)
   }
 
-  // No grid, a forced resample, or counts that disagree with the grid found: average the content
-  // (the grid itself when there is one, so its margins stay out) into the requested cells.
+  // No grid, a forced resample, or counts that disagree with the grid found and fit no lattice:
+  // average the content (the grid itself when there is one, so its margins stay out) into the
+  // requested cells.
   const crop = grid ? gridBox(grid, flat) : findContentBox(flat)
   let cols: number
   let rows: number

@@ -33,12 +33,17 @@ export function detectGridOpaque(flat: RgbaImage): DetectedGrid | null {
   if (w < 16 || h < 16) return null
   const L = luminance(flat)
   const straight = detectStraight(L, w, h, false)
-  if (straight && (straight.confidence >= STRAIGHT_ACCEPT || exact(straight))) return straight
+  // Lines that drift along their length (a tilted photo) make a straight lattice lose rows or columns
+  // at no cost in confidence: such a lattice is never taken without trying the photo model.
+  const skewed = !!straight?.fit && straight.fit.skew > EXACT_SKEW
+  if (straight && !skewed && (straight.confidence >= STRAIGHT_ACCEPT || exact(straight))) return straight
   const warped = detectWarped(L, w, h)
   if (!warped) return straight
-  if (!straight) return warped
-  // The straight reading is exact on screenshots; the photo model replaces it only when clearly more
-  // confident and not smaller (its margin trimming can cut off pale rows of a sharp chart).
+  if (!straight || skewed) return warped
+  // Confidence does not see a missing outer row or column, so the larger lattice wins unless it is
+  // less confident. Otherwise the straight reading is exact on screenshots; the photo model replaces
+  // it only when clearly more confident and not smaller (its margin trimming can cut off pale rows).
   const cells = (g: DetectedGrid) => g.x.count * g.y.count
-  return warped.confidence > straight.confidence + WARPED_MARGIN && cells(warped) >= cells(straight) ? warped : straight
+  if (cells(warped) > cells(straight)) return warped.confidence >= straight.confidence ? warped : straight
+  return warped.confidence > straight.confidence + WARPED_MARGIN && cells(warped) === cells(straight) ? warped : straight
 }

@@ -57,6 +57,13 @@ const PHOTO_COVERAGE_QUANTILE = 0.6
 const PHOTO_STRONG = 0.5
 /** An outer row or column of a photo lattice is kept when its crossing lines show at this fraction of their median support. */
 const TRIM_SUPPORT = 0.5
+/**
+ * A photo row or column whose cells are trimmed is kept when its outer line is this strong relative to
+ * both the typical line of its family and its own inner line (the chart border),
+ */
+const BORDER_LINE = 1.3
+/** and its inner line at least this strong. */
+const VISIBLE_LINE = 0.5
 /** The background evidence around a line: this quantile of the evidence across its cell. */
 const BASELINE_QUANTILE = 0.3
 /** At most this many evenly spaced samples estimate that background. */
@@ -82,6 +89,14 @@ const EDGE_SUPPORT = 0.5
 const EDGE_CELLS = 0.8
 /** A cell is uniform when this fraction of its inner samples lies within the tolerance of its median. */
 const EDGE_UNIFORM = 0.6
+/** Slopes searched for the tilt of a straight lattice's lines: up to about 4.6 degrees, refined to 0.11 degrees. */
+const MAX_TILT = 0.08
+const TILT_COARSE = 0.008
+const TILT_STEP = 0.002
+/** A tilt that moves the lines by more than this many pitches end to end is a drift the local skew measure may miss. */
+const TILT_DRIFT = 0.5
+/** An outer line of a straight lattice supported below this fraction of the typical line must pass the edge test too. */
+const WEAK_EDGE = 0.75
 
 /** Per-axis accumulators. `ev` is band-major: index = band * n + position. */
 export interface AxisData {
@@ -101,6 +116,8 @@ interface AxisFit {
   strong: number
   /** RMS of the located lines around the lattice, in pitches. */
   residual: number
+  /** Support of each line of the extent (0..count) relative to the typical line. */
+  lines?: number[]
 }
 
 /**
@@ -504,7 +521,42 @@ function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean, hin
   const regularity = Math.max(0, 1 - fit.rms / (0.12 * fit.b))
   const periodicity = Math.max(0, Math.min(1, rho / 0.3))
   const confidence = strongFraction * (0.4 + 0.6 * regularity) * periodicity
-  return { start: fit.a + fit.b * bestStart, pitch: fit.b, count, confidence, strong: strongFraction, residual: fit.rms / fit.b }
+  const lines = Array.from(support.subarray(bestStart, bestEnd + 1), (s) => s / ref)
+  return { start: fit.a + fit.b * bestStart, pitch: fit.b, count, confidence, strong: strongFraction, residual: fit.rms / fit.b, lines }
+}
+
+/**
+ * Strength of each line of `fit` (index 0..count) across the bands [b0, b1): per band, the peak near
+ * the line above a low percentile of the cell around it (as in analyzeAxis), then the median over the bands.
+ */
+function lineStrengths(d: AxisData, b0: number, b1: number, fit: AxisFit): number[] {
+  const n = d.n
+  const bands = b1 - b0
+  const values = new Float64Array(bands)
+  const win = new Float64Array(MAX_WINDOW)
+  const out: number[] = []
+  for (let k = 0; k <= fit.count; k++) {
+    const p = fit.start + k * fit.pitch
+    const xi = Math.round(p - 0.5)
+    const lo = Math.max(0, Math.round(p - fit.pitch / 2 - 0.5))
+    const hi = Math.min(n - 1, Math.round(p + fit.pitch / 2 - 0.5))
+    if (hi < lo) {
+      out.push(0)
+      continue
+    }
+    const len = Math.min(MAX_WINDOW, hi - lo + 1)
+    const step = (hi - lo + 1) / len
+    for (let g = 0; g < bands; g++) {
+      const off = (b0 + g) * n
+      let peak = -Infinity
+      for (let i = xi - 1; i <= xi + 1; i++) if (i >= 0 && i < n && d.ev[off + i] > peak) peak = d.ev[off + i]
+      for (let i = 0; i < len; i++) win[i] = d.ev[off + lo + Math.floor(i * step)]
+      values[g] = (peak - quantile(win, len, BASELINE_QUANTILE)) * (BAND / d.bandSize[b0 + g])
+    }
+    values.sort()
+    out.push(values[bands >> 1])
+  }
+  return out
 }
 
 /** Bands across this axis that lie inside the fitted extent (at least one). */
@@ -522,7 +574,9 @@ function bandRange(fit: AxisFit, bands: number): [number, number] {
  * Drops outer rows and columns of a photo lattice that are page, not chart. Moiré bands and page
  * texture can carry one family of lines past the chart; a row of cells belongs to the chart when the
  * other family (its vertical lines) shows inside it, or when it is mostly dark (a solid row of ink
- * hides its lines in the blur). Columns likewise.
+ * hides its lines in the blur), or when it is bounded on its outer side by a line well above the
+ * typical line of its family with a visible line on its inner side: the border of the chart, which
+ * keeps rows of plain paper cells whose faint lines vanish in the blur. Columns likewise.
  */
 function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y: AxisData }, x: AxisFit, y: AxisFit): [AxisFit, AxisFit] | null {
   const lumas: number[] = []
@@ -534,7 +588,7 @@ function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y
   const dark = 0.5 * (lumas[Math.floor(0.1 * (lumas.length - 1))] + lumas[Math.floor(0.9 * (lumas.length - 1))])
   const clampIndex = (v: number, n: number) => Math.min(n - 1, Math.max(0, Math.round(v - 0.5)))
   // Per cell row: vertical-line support (evidence on the lines minus mid-cell) and the dark fraction.
-  const profile = (along: AxisFit, across: AxisFit, d: AxisData, n: number, pixel: (a: number, b: number) => number) => {
+  const profile = (along: AxisFit, across: AxisFit, d: AxisData, n: number, pixel: (a: number, b: number) => number, lines: number[]) => {
     const support: number[] = []
     const darkness: number[] = []
     for (let r = 0; r < across.count; r++) {
@@ -554,15 +608,20 @@ function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y
     const sorted = support.slice().sort((a, b) => a - b)
     const floor = TRIM_SUPPORT * sorted[sorted.length >> 1]
     const keep = support.map((v, i) => v >= floor || darkness[i] >= 0.3)
+    const typical = median(lines)
+    const border = (outer: number, inner: number) =>
+      lines[outer] >= BORDER_LINE * Math.max(typical, lines[inner]) && lines[inner] >= VISIBLE_LINE * typical
     let a = 0
-    while (a < keep.length && !keep[a]) a++
+    while (a < keep.length && !keep[a] && !border(a, a + 1)) a++
     let b = keep.length - 1
-    while (b > a && !keep[b]) b--
+    while (b > a && !keep[b] && !border(b + 1, b)) b--
     return [a, b] as const
   }
   const at = (px: number, py: number) => L[clampIndex(py, h) * w + clampIndex(px, w)]
-  const [r0, r1] = profile(x, y, ev.x, w, at)
-  const [c0, c1] = profile(y, x, ev.y, h, (py, px) => at(px, py))
+  const [xb0, xb1] = bandRange(x, ev.y.bands)
+  const [yb0, yb1] = bandRange(y, ev.x.bands)
+  const [r0, r1] = profile(x, y, ev.x, w, at, lineStrengths(ev.y, xb0, xb1, y))
+  const [c0, c1] = profile(y, x, ev.y, h, (py, px) => at(px, py), lineStrengths(ev.x, yb0, yb1, x))
   if (r1 - r0 + 1 < MIN_CELLS || c1 - c0 + 1 < MIN_CELLS) return null
   return [
     { ...x, start: x.start + c0 * x.pitch, count: c1 - c0 + 1 },
@@ -597,10 +656,59 @@ function lineOffset(d: AxisData, b0: number, b1: number, fit: AxisFit): number {
 }
 
 /** How far the lines of `fit` drift between the first and the last third of their length, in pitches. */
-function skew(d: AxisData, fit: AxisFit, across: AxisFit): number {
+function skew(d: AxisData, fit: AxisFit, across: AxisFit, tilt: boolean): number {
   const [b0, b1] = bandRange(across, d.bands)
   const third = Math.max(1, Math.floor((b1 - b0) / 3))
-  return Math.abs(lineOffset(d, b0, b0 + third, fit) - lineOffset(d, b1 - third, b1, fit)) / fit.pitch
+  const local = Math.abs(lineOffset(d, b0, b0 + third, fit) - lineOffset(d, b1 - third, b1, fit)) / fit.pitch
+  // The local measure only sees offsets within a quarter pitch, so a tilt that shifts the lines by
+  // about a whole pitch reads as straight. The common slope of the lines does not alias: when it moves
+  // them by more than half a pitch end to end, that is the drift.
+  if (!tilt) return local
+  const slope = lineSlope(d, b0, b1)
+  const drift = (Math.abs(slope) * (across.count * across.pitch)) / fit.pitch
+  return drift > TILT_DRIFT ? Math.max(local, drift) : local
+}
+
+/**
+ * The common slope (shift along the axis per pixel across it) of the lines in bands [b0, b1): the
+ * shear that concentrates their evidence most, searched up to MAX_TILT.
+ */
+function lineSlope(d: AxisData, b0: number, b1: number): number {
+  const n = d.n
+  const tc = ((b0 + b1) * BAND) / 2
+  const P = new Float64Array(n)
+  const score = (slope: number) => {
+    P.fill(0)
+    for (let b = b0; b < b1; b++) {
+      const shift = slope * (b * BAND + d.bandSize[b] / 2 - tc)
+      const fi = Math.floor(shift)
+      const fr = shift - fi
+      const off = b * n
+      const lo = Math.max(0, -fi)
+      const hi = Math.min(n, n - fi - 1)
+      for (let i = lo; i < hi; i++) P[i] += d.ev[off + i + fi] * (1 - fr) + d.ev[off + i + fi + 1] * fr
+    }
+    let e = 0
+    for (let i = 0; i < n; i++) e += P[i] * P[i]
+    return e
+  }
+  let best = 0
+  let bestScore = score(0)
+  const search = (from: number, to: number, step: number) => {
+    for (let k = Math.ceil(from / step - 1e-9); k * step <= to + 1e-9; k++) {
+      const v = k * step
+      if (v === 0) continue
+      const e = score(v)
+      if (e > bestScore) {
+        bestScore = e
+        best = v
+      }
+    }
+  }
+  search(-MAX_TILT, MAX_TILT, TILT_COARSE)
+  const centre = best
+  search(centre - TILT_COARSE, centre + TILT_COARSE, TILT_STEP)
+  return best
 }
 
 /** Luma at integer pixel (u, v): u along the axis being extended, v across it. */
@@ -647,12 +755,12 @@ function samples(pixel: Pixel, nu: number, nv: number, u0: number, u1: number, v
 }
 
 /**
- * Adds the cells cut off by the image border (or lying past the last strong line) at both ends of
- * `along`, one at a time, while each is mostly in the picture, the crossing lines of `across` run on
- * through it and its cells have the chart's ink or paper light. Margins fail: page colour carries no
- * crossing lines, and axis numbers and text sit mid-cell.
+ * Whether the strip of cells [c0, c0 + pitch) of `along` belongs to the chart: it is mostly in the
+ * picture, the crossing lines of `across` run on through it and its cells have the chart's ink or
+ * paper light. Margins fail: page colour carries no crossing lines, and axis numbers and text sit
+ * mid-cell. Null when the crossing lines show nowhere.
  */
-function extendEdges(pixel: Pixel, nu: number, nv: number, along: AxisFit, across: AxisFit, levels: [number, number]): AxisFit {
+function edgeTest(pixel: Pixel, nu: number, nv: number, along: AxisFit, across: AxisFit, levels: [number, number]): ((c0: number) => boolean) | null {
   const p = along.pitch
   const supports: number[] = []
   const step = Math.max(1, Math.floor(along.count / 12))
@@ -661,7 +769,7 @@ function extendEdges(pixel: Pixel, nu: number, nv: number, along: AxisFit, acros
     supports.push(crossSupport(pixel, nu, nv, c + 0.15 * p, c + 0.85 * p, across))
   }
   const ref = median(supports)
-  if (ref <= 0) return along
+  if (ref <= 0) return null
   const tol = Math.max(16, 0.25 * Math.abs(levels[1] - levels[0]))
   const chartCell = (u0: number, u1: number, i: number) => {
     const v = across.start + i * across.pitch
@@ -671,7 +779,7 @@ function extendEdges(pixel: Pixel, nu: number, nv: number, along: AxisFit, acros
     if (Math.min(Math.abs(m - levels[0]), Math.abs(m - levels[1])) > tol) return false
     return values.filter((value) => Math.abs(value - m) <= tol).length >= EDGE_UNIFORM * values.length
   }
-  const accept = (c0: number) => {
+  return (c0: number) => {
     const lo = Math.max(0, c0)
     const hi = Math.min(nu, c0 + p)
     if (hi - lo < EDGE_COVER * p) return false
@@ -680,6 +788,30 @@ function extendEdges(pixel: Pixel, nu: number, nv: number, along: AxisFit, acros
     for (let i = 0; i < across.count; i++) if (chartCell(lo + 0.2 * p, hi - 0.2 * p, i)) good++
     return good >= EDGE_CELLS * across.count
   }
+}
+
+/**
+ * Drops the outer cells of `along` whose outer line is weakly supported and that fail the edge test,
+ * one at a time from each end: in a blurred photo the flank of the chart border can pass for a line
+ * one pitch further out, over the band of axis numbers.
+ */
+function shrinkEdges(along: AxisFit, accept: (c0: number) => boolean): AxisFit {
+  const lines = along.lines
+  if (!lines || lines.length !== along.count + 1) return along
+  const p = along.pitch
+  let a = 0
+  let b = along.count
+  while (b - a > MIN_CELLS && lines[a] < WEAK_EDGE && !accept(along.start + a * p)) a++
+  while (b - a > MIN_CELLS && lines[b] < WEAK_EDGE && !accept(along.start + (b - 1) * p)) b--
+  return { ...along, start: along.start + a * p, count: b - a, lines: lines.slice(a, b + 1) }
+}
+
+/**
+ * Adds the cells cut off by the image border (or lying past the last strong line) at both ends of
+ * `along`, one at a time, while each passes the edge test.
+ */
+function extendEdges(along: AxisFit, accept: (c0: number) => boolean): AxisFit {
+  const p = along.pitch
   let { start, count } = along
   while (accept(start - p)) {
     start -= p
@@ -755,15 +887,24 @@ export function detectStraight(L: Float32Array, w: number, h: number, gated: boo
   const fit: StraightFit = {
     lines: Math.min(x.strong, y.strong),
     residual: Math.max(x.residual, y.residual),
-    skew: Math.max(skew(ev.x, x, y), skew(ev.y, y, x)),
+    // Photos are rectified before this point: only screenshot-like lattices need the tilt search.
+    skew: Math.max(skew(ev.x, x, y, !gated), skew(ev.y, y, x, !gated)),
   }
   if (!gated) {
-    // A screenshot cut by the image border: the outer cells have no line on their far side.
+    // Outer cells beyond a weak outer line must look like the chart (a blurred photo can carry the
+    // lattice one pitch into the axis numbers); then a screenshot cut by the image border gets back
+    // the outer cells that have no line on their far side.
     const levels = cellLevels(L, w, h, x, y)
-    const ex = extendEdges((u, v) => L[v * w + u], w, h, x, y, levels)
-    const ey = extendEdges((u, v) => L[u * w + v], h, w, y, x, levels)
-    x = ex
-    y = ey
+    const px: Pixel = (u, v) => L[v * w + u]
+    const py: Pixel = (u, v) => L[u * w + v]
+    const sx = edgeTest(px, w, h, x, y, levels)
+    const sy = edgeTest(py, h, w, y, x, levels)
+    if (sx) x = shrinkEdges(x, sx)
+    if (sy) y = shrinkEdges(y, sy)
+    const ex = edgeTest(px, w, h, x, y, levels)
+    const ey = edgeTest(py, h, w, y, x, levels)
+    if (ex) x = extendEdges(x, ex)
+    if (ey) y = extendEdges(y, ey)
   }
   return {
     x: { start: x.start, pitch: x.pitch, count: x.count },
