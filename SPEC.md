@@ -182,3 +182,46 @@ Formato único para banco, API, export e import. Funções puras em `src/core/do
   pelo núcleo existente. A saída pode ser refinada, salva e exportada como qualquer outro padrão.
 - Modelos e fotos não alteram o núcleo, o ciclo de dois estados, os golden tests nem o contrato
   de persistência. A extensão de login por nome está documentada nas seções 9.2–9.4.
+
+## 12. Crochê filé e leitura guiada (v0.4 — decisões do Ro em 2026-11-22)
+
+O Ro croche **filé**, não só mosaico. Uma referência real (print 1179 × 481 de um gráfico de filé
+90 × 31, células vermelhas e brancas com linhas de grade, números nos eixos e marca d'água) virou
+um borrão no conversor da §11: a foto inteira (margens e números incluídos) era encaixada no
+grid com suavização e limiar de luminância, apagando motivos de 1 célula; e o mosaico overlay, por
+regra (§3.4), não reproduz um gráfico de filé 1:1.
+
+### 12.1 Visão de gráficos (`src/lib/vision/`, funções puras)
+- Detecta a grade regular do gráfico (passo subpixel, extensão, confiança), descartando margens,
+  números de eixo, setas e marca d'água; sem grade confiável → `null` (foto de objeto).
+- Amostra só o miolo de cada célula (sem linhas de grade) e classifica em 2 cores por k-means no
+  CIELAB (inicialização determinística). "Tinta" = classe mais escura (empate: mais saturada).
+- Sem grade: recorta margens uniformes e reamostra por média de área (nunca ponto a ponto).
+- Ajuste "sensibilidade" desloca a fronteira entre as duas cores.
+
+### 12.2 Modelo filé (`src/file/`, funções puras)
+- Dois estados por quadradinho: **fechado** (cheio) e **aberto** (vazio; "branco" é sinônimo).
+  Sem regras de conflito. Carreira 1 = base (embaixo); coluna 1 = esquerda. Até 200 × 200.
+- Leitura padrão ida e volta: carreira 1 da direita para a esquerda, carreira 2 da esquerda para a
+  direita, etc. Opções: sempre da direita para a esquerda; carreira 1 começando pela esquerda.
+- Leitura de uma carreira, na ordem de trabalho, agrupada:
+  `"Carreira 5 (da direita para a esquerda): 10 abertos, 1 fechado, 1 aberto, 3 fechados e 2 abertos"`.
+  Repetições de um bloco de 1–4 grupos, 3 ou mais vezes, podem ser compactadas: `3× (1 fechado, 1 aberto)`.
+  Contagem de pontos no filé padrão: 1 pa inicial; fechado = +3 pa; aberto = +2 correntes e 1 pa.
+- Documento local/exportação `crochet-file-pattern` v1, no espírito da §10 (`cells[0]` = carreira 1,
+  `'1'` = fechado). Persistência do filé é local (localStorage + JSON); salvar no servidor fica para
+  depois (exige mudar o contrato da §9/§10).
+
+### 12.3 Estúdio de filé (UI)
+- Importar foto/print de gráfico → grade detectada automaticamente (contagem exibida), inverter
+  fechado/aberto, sensibilidade, tamanho manual quando não há grade.
+- Modo **Editar** (tocar/arrastar alterna quadradinhos; desfazer/refazer; tamanho; cores) e modo
+  **Tecer**: tocar numa carreira (no gráfico ou na lista) mostra a leitura dela em letras grandes,
+  com a direção, trechos navegáveis, carreira anterior/próxima, progresso salvo, leitura em voz alta
+  (Web Speech API, pt-BR) e tela sempre acesa (Wake Lock) enquanto tece.
+
+### 12.4 Mosaico a partir de gráfico
+- O conversor de mosaico usa a mesma visão: quando há grade, as dimensões seguem o gráfico (mais uma
+  carreira de borda embaixo e em cima, total ímpar), opcionalmente 2 carreiras por linha do gráfico,
+  e a programação dinâmica da §11 pondera pela certeza de cada célula. A interface avisa que o
+  mosaico é uma adaptação e oferece o Estúdio de filé para reprodução fiel.
