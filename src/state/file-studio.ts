@@ -40,6 +40,8 @@ export interface FileStudioState {
   mode: StudioMode
   reading: ReadingOptions
   progress: FileProgress
+  /** "Ler em voz alta ao avançar": read each new segment aloud while crocheting. */
+  autoRead: boolean
 }
 
 export type FileStudioAction =
@@ -60,6 +62,7 @@ export type FileStudioAction =
   | { type: 'selectSegment'; segment: number }
   | { type: 'moveSegment'; delta: number }
   | { type: 'toggleDone'; row: number }
+  | { type: 'setAutoRead'; on: boolean }
 
 export const HISTORY_LIMIT = 100
 export const START_ROWS = 10
@@ -78,6 +81,7 @@ export function initialFileStudio(chart: FileChart = emptyFileChart(START_ROWS, 
     mode: 'editar',
     reading: { ...DEFAULT_READING },
     progress: { row: 1, segment: 0, doneRows: [] },
+    autoRead: false,
   }
 }
 
@@ -230,6 +234,9 @@ export function fileStudioReducer(state: FileStudioState, action: FileStudioActi
         : [...done, action.row].sort((a, b) => a - b)
       return { ...state, progress: { ...state.progress, doneRows } }
     }
+    case 'setAutoRead':
+      if (state.autoRead === action.on) return state
+      return { ...state, autoRead: action.on }
   }
 }
 
@@ -242,6 +249,8 @@ interface StoredStudio {
   mode: StudioMode
   reading: ReadingOptions
   progress: FileProgress
+  /** Added after the first release: missing in older saves, read as off. */
+  autoRead?: boolean
 }
 
 /** A name the document format accepts: no control characters, trimmed, at most 100 characters, never empty. */
@@ -262,6 +271,7 @@ export function serializeFileStudio(state: FileStudioState): string {
     mode: state.mode,
     reading: state.reading,
     progress: state.progress,
+    autoRead: state.autoRead,
   }
   return JSON.stringify(stored)
 }
@@ -299,7 +309,8 @@ export function deserializeFileStudio(text: string | null): FileStudioState | nu
         doneRows: done,
       }
     }
-    return { ...state, mode, reading, progress: fitProgress(progress, chart, reading) }
+    const autoRead = data.autoRead === true
+    return { ...state, mode, reading, progress: fitProgress(progress, chart, reading), autoRead }
   } catch {
     return null
   }

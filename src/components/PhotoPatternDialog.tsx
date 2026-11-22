@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowRight, Check, Crop, Grid3x3, ImagePlus, LoaderCircle, ScanLine, ShieldCheck, Sparkles, Upload, X } from 'lucide-react'
+import { ArrowRight, Check, Crop, FlipHorizontal2, Grid3x3, ImagePlus, LoaderCircle, RotateCw, ScanLine, ShieldCheck, Sparkles, Upload, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { COL_OPTIONS, ROW_OPTIONS, type DesignData, type Yarn } from '../core'
+import { NO_ORIENTATION, orientMatrix, type ChartOrientation } from '../file'
 import { decodePhotoFile, samplePhoto, type DecodedPhoto } from '../lib/photo-image'
 import { automaticPhotoThreshold, convertChartAnalysis, convertPhotoPixels, type PhotoFit, type PhotoPatternResult } from '../lib/photo-pattern'
 import { analyzeChartImage, findContentBox, type AnalyzeOptions, type ChartAnalysis, type RgbaImage } from '../lib/vision'
@@ -41,16 +42,23 @@ function signed(value: number): string {
   return value > 0 ? `+${value}` : String(value)
 }
 
-function SourcePreview({ source }: { source: DecodedPhoto }) {
+function SourcePreview({ source, orientation }: { source: DecodedPhoto; orientation: ChartOrientation }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
     canvas.width = source.canvas.width
     canvas.height = source.canvas.height
-    canvas.getContext('2d')?.drawImage(source.canvas, 0, 0)
-  }, [source])
-  return <canvas ref={ref} role="img" aria-label="Fotografia original selecionada" />
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    // Shown the way the chart will be read: half a turn reverses both axes, a mirror only the horizontal one.
+    const sx = orientation.rotate180 !== orientation.mirror ? -1 : 1
+    const sy = orientation.rotate180 ? -1 : 1
+    ctx.setTransform(sx, 0, 0, sy, sx < 0 ? canvas.width : 0, sy < 0 ? canvas.height : 0)
+    ctx.drawImage(source.canvas, 0, 0)
+  }, [source, orientation])
+  const turned = `${orientation.rotate180 ? ', girada 180°' : ''}${orientation.mirror ? ', espelhada' : ''}`
+  return <canvas ref={ref} role="img" aria-label={`Fotografia original selecionada${turned}`} />
 }
 
 export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio }: PhotoPatternDialogProps) {
@@ -74,6 +82,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
   const [sizeMode, setSizeMode] = useState<SizeMode>('auto')
   const [rowsPerChartRow, setRowsPerChartRow] = useState<1 | 2>(1)
   const [inkBias, setInkBias] = useState(0)
+  const [orientation, setOrientation] = useState<ChartOrientation>(NO_ORIENTATION)
   const [analyses, setAnalyses] = useState<AnalysisCache>({ image: null, byKey: {}, latest: null })
 
   useEffect(() => {
@@ -172,7 +181,12 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
   const wantedEntry = lookup(wantedKey)
   const staleEntry = wantedEntry === undefined && readsChart ? lookup(analyses.latest) : undefined
   const chartEntry = wantedEntry ?? staleEntry
-  const chartAnalysis = chartEntry instanceof Error ? undefined : chartEntry
+  const readAnalysis = chartEntry instanceof Error ? undefined : chartEntry
+  // An upside-down or mirrored chart is turned before it becomes a mosaic.
+  const chartAnalysis = useMemo<ChartAnalysis | undefined>(() => {
+    if (!readAnalysis || (!orientation.rotate180 && !orientation.mirror)) return readAnalysis
+    return { ...readAnalysis, ink: orientMatrix(readAnalysis.ink, orientation), certainty: orientMatrix(readAnalysis.certainty, orientation) }
+  }, [readAnalysis, orientation])
   const chartRowsPerRow = sizeMode === 'manual' ? 1 : rowsPerChartRow
 
   const converted = useMemo<{ result: PhotoPatternResult | null; error: string | null }>(() => {
@@ -210,6 +224,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
       setSizeMode('auto')
       setRowsPerChartRow(1)
       setInkBias(0)
+      setOrientation(NO_ORIENTATION)
     } catch (err) {
       if (request === fileRequest.current) setError(message(err))
     } finally {
@@ -300,7 +315,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
                 <motion.div key="preview" className="photo-pattern-comparison" initial={{ opacity: reducedMotion ? 1 : 0 }} animate={{ opacity: 1 }} exit={{ opacity: reducedMotion ? 1 : 0 }}>
                   <figure>
                     <figcaption><span>01</span> Sua referência</figcaption>
-                    <div className="photo-pattern-image-stage"><SourcePreview source={source} /></div>
+                    <div className="photo-pattern-image-stage"><SourcePreview source={source} orientation={readsChart ? orientation : NO_ORIENTATION} /></div>
                     <p>A luz, os contornos, a inspiração.</p>
                   </figure>
                   <figure>
@@ -368,6 +383,10 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
                     <button type="button" onClick={() => setRowsPerChartRow(2)} aria-pressed={rowsPerChartRow === 2}>2 carreiras por linha</button>
                   </div></fieldset>
                 )}
+                <fieldset className="photo-pattern-fieldset"><legend>Orientação</legend><div className="photo-pattern-segments">
+                  <button type="button" onClick={() => setOrientation((o) => ({ ...o, rotate180: !o.rotate180 }))} aria-pressed={orientation.rotate180}><RotateCw size={14} />Girar 180°</button>
+                  <button type="button" onClick={() => setOrientation((o) => ({ ...o, mirror: !o.mirror }))} aria-pressed={orientation.mirror}><FlipHorizontal2 size={14} />Espelhar</button>
+                </div></fieldset>
                 <label className="photo-pattern-field photo-pattern-range">Sensibilidade<output>{signed(Math.round(inkBias * 100))}</output><input type="range" aria-label="Sensibilidade" min="-100" max="100" step="5" value={Math.round(inkBias * 100)} onChange={(event) => setInkBias(Number(event.target.value) / 100)} /></label>
                 <p className="photo-pattern-hint photo-pattern-range-hint">Para a direita, mais quadradinhos contam como cheios.</p>
               </>
