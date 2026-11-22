@@ -1,5 +1,6 @@
 import { classifyCells } from './classify'
-import { detectGridOpaque, type DetectedGrid } from './grid'
+import { detectGridOpaque } from './detect'
+import { type DetectedGrid, type GridMesh } from './grid'
 import { assertImage, findContentBox, opaque, type Box, type RgbaImage } from './image'
 
 export interface AnalyzeOptions {
@@ -64,8 +65,43 @@ function medianInPlace(buf: Float64Array, n: number): number {
   return n % 2 ? buf[n >> 1] : 0.5 * (buf[(n >> 1) - 1] + buf[n >> 1])
 }
 
+/** Per-channel median of the central part of every cell of a mesh grid (a photo), corners interpolated bilinearly. */
+function sampleMesh(image: RgbaImage, grid: DetectedGrid, mesh: GridMesh): Float32Array {
+  const { width: w, height: h, data } = image
+  const cols = grid.x.count
+  const rows = grid.y.count
+  const out = new Float32Array(cols * rows * 3)
+  const n = 5
+  const buf = [new Float64Array(n * n), new Float64Array(n * n), new Float64Array(n * n)]
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < cols; j++) {
+      const a = i * (cols + 1) + j
+      const b = a + cols + 1
+      let m = 0
+      for (let sy = 0; sy < n; sy++) {
+        const v = (1 - INNER) / 2 + (INNER * (sy + 0.5)) / n
+        for (let sx = 0; sx < n; sx++) {
+          const u = (1 - INNER) / 2 + (INNER * (sx + 0.5)) / n
+          const x = (1 - v) * ((1 - u) * mesh.x[a] + u * mesh.x[a + 1]) + v * ((1 - u) * mesh.x[b] + u * mesh.x[b + 1])
+          const y = (1 - v) * ((1 - u) * mesh.y[a] + u * mesh.y[a + 1]) + v * ((1 - u) * mesh.y[b] + u * mesh.y[b + 1])
+          const px = Math.max(0, Math.min(w - 1, Math.round(x - 0.5)))
+          const py = Math.max(0, Math.min(h - 1, Math.round(y - 0.5)))
+          const o = (py * w + px) * 4
+          buf[0][m] = data[o]
+          buf[1][m] = data[o + 1]
+          buf[2][m] = data[o + 2]
+          m++
+        }
+      }
+      for (let c = 0; c < 3; c++) out[(i * cols + j) * 3 + c] = medianInPlace(buf[c], m)
+    }
+  }
+  return out
+}
+
 /** Per-channel median of the central part of every cell of a detected grid. */
 function sampleGrid(image: RgbaImage, grid: DetectedGrid): Float32Array {
+  if (grid.mesh) return sampleMesh(image, grid, grid.mesh)
   const { width: w, height: h, data } = image
   const cols = grid.x.count
   const rows = grid.y.count
@@ -189,6 +225,13 @@ function toMatrices(ink: Uint8Array, certainty: Float32Array, cols: number, rows
 }
 
 function gridBox(grid: DetectedGrid, image: RgbaImage): Box {
+  if (grid.mesh) {
+    const x0 = Math.max(0, Math.floor(Math.min(...grid.mesh.x)))
+    const y0 = Math.max(0, Math.floor(Math.min(...grid.mesh.y)))
+    const x1 = Math.min(image.width, Math.ceil(Math.max(...grid.mesh.x)))
+    const y1 = Math.min(image.height, Math.ceil(Math.max(...grid.mesh.y)))
+    return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) }
+  }
   const x0 = Math.max(0, Math.round(grid.x.start))
   const y0 = Math.max(0, Math.round(grid.y.start))
   const x1 = Math.min(image.width, Math.round(grid.x.start + grid.x.count * grid.x.pitch))

@@ -430,3 +430,111 @@ export function renderTextPage(seed: number, width = 700, height = 500): RgbaIma
   }
   return { width, height, data }
 }
+
+export interface PhotoOptions {
+  /** Inverse warp: the source point shown at output pixel centre (x, y). Identity by default. */
+  warp?: (x: number, y: number) => readonly [number, number]
+  /** Gaussian blur, standard deviation in pixels. */
+  blur?: number
+  /** Horizontal banding added to every channel: amplitude (+-) and period in pixels, per component. */
+  moire?: readonly { amplitude: number; period: number }[]
+  /** Brightness lost at the corners (0..1), falling off with the squared distance from the centre. */
+  vignette?: number
+  /** Uniform per-channel noise amplitude (+-), standing in for sensor and JPEG noise. */
+  noise?: number
+  seed?: number
+}
+
+/** Bilinear RGB sample at a continuous point (pixel centres at +0.5), edges replicated. */
+function sampleRgb(image: RgbaImage, x: number, y: number, out: Float32Array, o: number): void {
+  const { width: w, height: h, data } = image
+  const fx = Math.max(0, Math.min(w - 1, x - 0.5))
+  const fy = Math.max(0, Math.min(h - 1, y - 0.5))
+  const x0 = Math.min(w - 2, Math.floor(fx))
+  const y0 = Math.min(h - 2, Math.floor(fy))
+  const ax = fx - x0
+  const ay = fy - y0
+  for (let c = 0; c < 3; c++) {
+    const p = (y0 * w + x0) * 4 + c
+    out[o + c] = (1 - ay) * ((1 - ax) * data[p] + ax * data[p + 4]) + ay * ((1 - ax) * data[p + w * 4] + ax * data[p + w * 4 + 4])
+  }
+}
+
+function gaussianBlur(rgb: Float32Array, w: number, h: number, sigma: number): Float32Array {
+  const r = Math.ceil(3 * sigma)
+  const k = Array.from({ length: 2 * r + 1 }, (_, i) => Math.exp(-((i - r) ** 2) / (2 * sigma * sigma)))
+  const sum = k.reduce((a, b) => a + b, 0)
+  const kernel = k.map((v) => v / sum)
+  const tmp = new Float32Array(rgb.length)
+  const out = new Float32Array(rgb.length)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) {
+        let s = 0
+        for (let i = -r; i <= r; i++) s += kernel[i + r] * rgb[(y * w + Math.min(w - 1, Math.max(0, x + i))) * 3 + c]
+        tmp[(y * w + x) * 3 + c] = s
+      }
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) {
+        let s = 0
+        for (let i = -r; i <= r; i++) s += kernel[i + r] * tmp[(Math.min(h - 1, Math.max(0, y + i)) * w + x) * 3 + c]
+        out[(y * w + x) * 3 + c] = s
+      }
+    }
+  }
+  return out
+}
+
+/** A phone photo of `image`: warped, blurred, banded, vignetted and noisy, same size. */
+export function photograph(image: RgbaImage, options: PhotoOptions): RgbaImage {
+  const { width: w, height: h } = image
+  let rgb: Float32Array<ArrayBufferLike> = new Float32Array(w * h * 3)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const [sx, sy] = options.warp ? options.warp(x + 0.5, y + 0.5) : [x + 0.5, y + 0.5]
+      sampleRgb(image, sx, sy, rgb, (y * w + x) * 3)
+    }
+  }
+  if (options.blur) rgb = gaussianBlur(rgb, w, h, options.blur)
+  const random = seededRandom(options.seed ?? 1)
+  const cx = w / 2
+  const cy = h / 2
+  const rr = cx * cx + cy * cy
+  const data = new Uint8ClampedArray(w * h * 4)
+  for (let y = 0; y < h; y++) {
+    let band = 0
+    for (const m of options.moire ?? []) band += m.amplitude * Math.sin((2 * Math.PI * y) / m.period)
+    for (let x = 0; x < w; x++) {
+      const gain = 1 - (options.vignette ?? 0) * (((x - cx) ** 2 + (y - cy) ** 2) / rr)
+      for (let c = 0; c < 3; c++) {
+        const n = options.noise ? (random() * 2 - 1) * options.noise : 0
+        data[(y * w + x) * 4 + c] = Math.round(rgb[(y * w + x) * 3 + c] * gain + band + n)
+      }
+      data[(y * w + x) * 4 + 3] = 255
+    }
+  }
+  return { width: w, height: h, data }
+}
+
+/** Inverse warp of a rotation by `degrees` (clockwise on screen) about the centre of a w x h image. */
+export function rotation(w: number, h: number, degrees: number): (x: number, y: number) => readonly [number, number] {
+  const t = (-degrees * Math.PI) / 180
+  const cos = Math.cos(t)
+  const sin = Math.sin(t)
+  return (x, y) => [w / 2 + (x - w / 2) * cos - (y - h / 2) * sin, h / 2 + (x - w / 2) * sin + (y - h / 2) * cos]
+}
+
+/**
+ * Inverse warp of a mild perspective: the shown pitch changes by -+`amount` from left to right and
+ * from top to bottom, and the horizontal lines converge slightly towards the right (keystone).
+ */
+export function perspective(w: number, h: number, amount: number): (x: number, y: number) => readonly [number, number] {
+  return (x, y) => {
+    const u = x - w / 2
+    const v = y - h / 2
+    return [x + (amount * u * u) / w, y + (amount * v * v) / h + (0.5 * amount * u * v) / w]
+  }
+}

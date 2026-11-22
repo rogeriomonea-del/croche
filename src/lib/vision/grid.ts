@@ -1,4 +1,3 @@
-import { assertImage, luminance, opaque, type RgbaImage } from './image'
 
 /** One axis of a regular grid, in source-pixel coordinates. */
 export interface GridAxis {
@@ -10,21 +9,42 @@ export interface GridAxis {
   count: number
 }
 
+/**
+ * The lattice nodes of a grid that is not straight (a photo: rotation, perspective, bent lines).
+ * Node (r, c), r in 0..y.count and c in 0..x.count, is the corner where horizontal line r meets
+ * vertical line c, at index r * (x.count + 1) + c, in source-pixel coordinates.
+ */
+export interface GridMesh {
+  x: number[]
+  y: number[]
+}
+
 export interface DetectedGrid {
+  /** For a mesh grid: the straight lattice that best approximates it (start and pitch averaged over the lines). */
   x: GridAxis
   y: GridAxis
   /** 0..1 */
   confidence: number
+  /** Present when the grid was found in a photo and is not a straight lattice; sample cells through it. */
+  mesh?: GridMesh
+  /** Rotation of the grid in degrees (positive: clockwise on screen), when it was measured. */
+  angle?: number
 }
 
 /** Evidence is accumulated in bands of this many pixels across the other axis. */
-const BAND = 8
+export const BAND = 8
 const MIN_PITCH = 4
 const MIN_CELLS = 3
 /** A grid line may be invisible (e.g. between two filled cells) for at most this many lattice steps in a row. */
 const MAX_GAP = 3
 /** Coverage support: a line must show evidence in at least 75% of the bands across the grid (text does not). */
 const COVERAGE_QUANTILE = 0.25
+/** In a photo, lines between two filled cells often vanish in the blur: there a line needs evidence in 40% of the bands. */
+const PHOTO_COVERAGE_QUANTILE = 0.6
+/** In a photo a line is strong at this fraction of the typical support (0.35 for screenshots): moiré and page texture around the chart stay out. */
+const PHOTO_STRONG = 0.5
+/** An outer row or column of a photo lattice is kept when its crossing lines show at this fraction of their median support. */
+const TRIM_SUPPORT = 0.5
 /** The background evidence around a line: this quantile of the evidence across its cell. */
 const BASELINE_QUANTILE = 0.3
 /** At most this many evenly spaced samples estimate that background. */
@@ -38,9 +58,13 @@ const MIN_EVIDENCE_PER_PIXEL = 0.06
 const MIN_CONFIDENCE = 0.45
 /** Largest accepted ratio between the cell width and height. */
 const MAX_ASPECT = 2
+/** Radius of the local mean that tells a grid line from the centre of a blurred cell. */
+const MEAN_RADIUS = 10
+/** How far (relative to the ridge's own depth) the sides of a gated ridge may sit on its side of the mean: blur darkens a line's sides too. */
+const GATE = 0.35
 
 /** Per-axis accumulators. `ev` is band-major: index = band * n + position. */
-interface AxisData {
+export interface AxisData {
   n: number
   bands: number
   /** Pixels across the other axis covered by each band. */
@@ -59,21 +83,60 @@ interface AxisFit {
  * Line evidence at a pixel from its neighbours along one direction: a thin line darker or lighter
  * than both sides two pixels away (ridge), or a colour step concentrated on this pixel (the edge
  * between two differently coloured cells). Plain edges produce no ridge, flat areas nothing.
+ *
+ * With `gated`, `m` is the local mean luma. Grid lines are the minority pixels around them, so their
+ * sides (the cells) lie on the far side of the mean: a dark ridge only counts when its sides are
+ * lighter than the mean (up to GATE of its depth), a light ridge when they are darker. In a blurred photo the centre of a cell is a ridge
+ * too (a white cell becomes a light bump between two dark lines); its sides are on the same side
+ * as itself, so it is ignored and the lattice does not read at half its pitch.
  */
-function lineEvidence(a2: number, a1: number, c: number, b1: number, b2: number): number {
+function lineEvidence(a2: number, a1: number, c: number, b1: number, b2: number, m: number, gated: boolean): number {
   const lo = a2 < b2 ? a2 : b2
   const hi = a2 < b2 ? b2 : a2
-  let e = lo - c
-  const light = c - hi
+  let e = !gated || m - lo < GATE * (m - c) ? lo - c : 0
+  const light = !gated || hi - m < GATE * (c - m) ? c - hi : 0
   if (light > e) e = light
-  const step = Math.abs(b2 - a2) - Math.abs(b2 - b1) - Math.abs(a1 - a2)
+  // Gated (photos): a blurred edge is a ramp, which the plain test reads as a step on every pixel;
+  // only a step much steeper here than on either side counts.
+  const step = Math.abs(b2 - a2) - (gated ? 2 : 1) * (Math.abs(b2 - b1) + Math.abs(a1 - a2))
   if (step > e) e = step
   // Saturate: what matters is that a line is there, not its contrast, so faint lines on paper
   // count nearly as much as strong ink/paper edges.
   return e > 0 ? e / (e + SATURATION) : 0
 }
 
-function computeEvidence(L: Float32Array, w: number, h: number): { x: AxisData; y: AxisData } {
+/** Mean of `L` over a (2r+1)^2 window, edges replicated (separable running sums). */
+export function boxMean(L: Float32Array, w: number, h: number, r: number): Float32Array {
+  const taps = 2 * r + 1
+  const tmp = new Float32Array(w * h)
+  for (let yy = 0; yy < h; yy++) {
+    const row = yy * w
+    let s = 0
+    for (let k = -r; k <= r; k++) s += L[row + Math.min(w - 1, Math.max(0, k))]
+    for (let xx = 0; xx < w; xx++) {
+      tmp[row + xx] = s / taps
+      s += L[row + Math.min(w - 1, xx + r + 1)] - L[row + Math.max(0, xx - r)]
+    }
+  }
+  const out = new Float32Array(w * h)
+  const acc = new Float64Array(w)
+  for (let k = -r; k <= r; k++) {
+    const src = Math.min(h - 1, Math.max(0, k)) * w
+    for (let xx = 0; xx < w; xx++) acc[xx] += tmp[src + xx]
+  }
+  for (let yy = 0; yy < h; yy++) {
+    const out0 = yy * w
+    const add = Math.min(h - 1, yy + r + 1) * w
+    const drop = Math.max(0, yy - r) * w
+    for (let xx = 0; xx < w; xx++) {
+      out[out0 + xx] = acc[xx] / taps
+      acc[xx] += tmp[add + xx] - tmp[drop + xx]
+    }
+  }
+  return out
+}
+
+export function computeEvidence(L: Float32Array, w: number, h: number, gated: boolean): { x: AxisData; y: AxisData } {
   const rowBands = Math.ceil(h / BAND)
   const colBands = Math.ceil(w / BAND)
   const x: AxisData = { n: w, bands: rowBands, bandSize: new Uint16Array(rowBands), ev: new Float32Array(rowBands * w) }
@@ -110,6 +173,8 @@ function computeEvidence(L: Float32Array, w: number, h: number): { x: AxisData; 
     }
   }
 
+  const M = gated ? boxMean(L, w, h, MEAN_RADIUS) : L
+
   // The y evidence is accumulated row by row in (row, column band) order, then transposed.
   const xev = x.ev
   const tev = new Float32Array(h * colBands)
@@ -118,7 +183,7 @@ function computeEvidence(L: Float32Array, w: number, h: number): { x: AxisData; 
     const xb = (yy >> 3) * w
     for (let xx = 2; xx < w - 2; xx++) {
       const p = row + xx
-      xev[xb + xx] += lineEvidence(Lv[p - 2], Lv[p - 1], Lv[p], Lv[p + 1], Lv[p + 2])
+      xev[xb + xx] += lineEvidence(Lv[p - 2], Lv[p - 1], Lv[p], Lv[p + 1], Lv[p + 2], M[p], gated)
     }
     if (yy >= 2 && yy < h - 2) {
       const tb = yy * colBands
@@ -127,7 +192,7 @@ function computeEvidence(L: Float32Array, w: number, h: number): { x: AxisData; 
       const s1 = row + w
       const s2 = row + 2 * w
       for (let xx = 0; xx < w; xx++) {
-        tev[tb + (xx >> 3)] += lineEvidence(Lh[r2 + xx], Lh[r1 + xx], Lh[row + xx], Lh[s1 + xx], Lh[s2 + xx])
+        tev[tb + (xx >> 3)] += lineEvidence(Lh[r2 + xx], Lh[r1 + xx], Lh[row + xx], Lh[s1 + xx], Lh[s2 + xx], M[row + xx], gated)
       }
     }
   }
@@ -214,7 +279,7 @@ function fitLines(ks: number[], pos: Float64Array, pitch: number): LineFit | nul
  * a line only counts when it shows up across most of those bands, which rejects axis numbers,
  * markers and watermarks that happen to sit on the lattice.
  */
-function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean): AxisFit | null {
+function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean, hint?: number, photo = false): AxisFit | null {
   const n = d.n
   if (n < MIN_CELLS * MIN_PITCH + 6 || b1 <= b0) return null
 
@@ -254,10 +319,17 @@ function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean): Ax
   for (let l = MIN_PITCH; l <= lagLimit; l++) if (A[l] > best) best = A[l]
   if (best <= 0) return null
   let lag = -1
-  for (let l = MIN_PITCH; l <= lagLimit; l++) {
-    if (A[l] >= 0.35 * best && A[l] >= A[l - 1] && A[l] > A[l + 1]) {
-      lag = l
-      break
+  if (hint !== undefined) {
+    // Known pitch: the strongest peak near it.
+    for (let l = Math.max(MIN_PITCH, Math.floor(0.8 * hint)); l <= Math.min(lagLimit, Math.ceil(1.25 * hint)); l++) {
+      if (A[l] >= A[l - 1] && A[l] > A[l + 1] && A[l] > 0 && (lag < 0 || A[l] > A[lag])) lag = l
+    }
+  } else {
+    for (let l = MIN_PITCH; l <= lagLimit; l++) {
+      if (A[l] >= 0.35 * best && A[l] >= A[l - 1] && A[l] > A[l + 1]) {
+        lag = l
+        break
+      }
     }
   }
   if (lag < 0) return null
@@ -353,7 +425,7 @@ function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean): Ax
         values[g] = (peak - base) * (BAND / d.bandSize[b0 + g])
       }
       values.sort()
-      support[k] = values[Math.floor(COVERAGE_QUANTILE * bands)]
+      support[k] = values[Math.floor((photo ? PHOTO_COVERAGE_QUANTILE : COVERAGE_QUANTILE) * bands)]
     }
   }
   let smax = 0
@@ -361,7 +433,7 @@ function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean): Ax
   if (smax <= 0) return null
   const ref = median(Array.from(support).filter((s) => s >= 0.15 * smax))
   // Summed support may come from a grid covering only part of the bands, hence the lower floor.
-  const threshold = Math.max(0.35 * ref, MIN_EVIDENCE_PER_PIXEL * perPixel * (coverage ? 1 : 0.25))
+  const threshold = Math.max((photo ? PHOTO_STRONG : 0.35) * ref, MIN_EVIDENCE_PER_PIXEL * perPixel * (coverage ? 1 : 0.25))
   const strong = Array.from(support, (s) => s >= threshold)
 
   // Extent: the run of lattice positions with the most strong lines, gaps of up to MAX_GAP allowed.
@@ -422,28 +494,81 @@ function bandRange(fit: AxisFit, bands: number): [number, number] {
   return [b0, b1]
 }
 
-/** null when the picture has no regular grid (a photo of an object, a drawing without grid lines). */
-export function detectGrid(image: RgbaImage): DetectedGrid | null {
-  assertImage(image)
-  return detectGridOpaque(opaque(image))
+/**
+ * Drops outer rows and columns of a photo lattice that are page, not chart. Moiré bands and page
+ * texture can carry one family of lines past the chart; a row of cells belongs to the chart when the
+ * other family (its vertical lines) shows inside it, or when it is mostly dark (a solid row of ink
+ * hides its lines in the blur). Columns likewise.
+ */
+function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y: AxisData }, x: AxisFit, y: AxisFit): [AxisFit, AxisFit] | null {
+  const lumas: number[] = []
+  for (let r = 0; r < y.count; r += 2) {
+    const yy = Math.min(h - 1, Math.max(0, Math.round(y.start + (r + 0.5) * y.pitch - 0.5)))
+    for (let c = 0; c < x.count; c += 2) lumas.push(L[yy * w + Math.min(w - 1, Math.max(0, Math.round(x.start + (c + 0.5) * x.pitch - 0.5)))])
+  }
+  lumas.sort((a, b) => a - b)
+  const dark = 0.5 * (lumas[Math.floor(0.1 * (lumas.length - 1))] + lumas[Math.floor(0.9 * (lumas.length - 1))])
+  const clampIndex = (v: number, n: number) => Math.min(n - 1, Math.max(0, Math.round(v - 0.5)))
+  // Per cell row: vertical-line support (evidence on the lines minus mid-cell) and the dark fraction.
+  const profile = (along: AxisFit, across: AxisFit, d: AxisData, n: number, pixel: (a: number, b: number) => number) => {
+    const support: number[] = []
+    const darkness: number[] = []
+    for (let r = 0; r < across.count; r++) {
+      const centre = across.start + (r + 0.5) * across.pitch
+      const b = Math.min(d.bands - 1, Math.max(0, Math.floor(centre / BAND)))
+      let sup = 0
+      let darkCount = 0
+      for (let k = 0; k < along.count; k++) {
+        const line = clampIndex(along.start + k * along.pitch, n)
+        const mid = clampIndex(along.start + (k + 0.5) * along.pitch, n)
+        sup += d.ev[b * n + line] - d.ev[b * n + mid]
+        if (pixel(along.start + (k + 0.5) * along.pitch, centre) < dark) darkCount++
+      }
+      support.push(sup)
+      darkness.push(darkCount / along.count)
+    }
+    const sorted = support.slice().sort((a, b) => a - b)
+    const floor = TRIM_SUPPORT * sorted[sorted.length >> 1]
+    const keep = support.map((v, i) => v >= floor || darkness[i] >= 0.3)
+    let a = 0
+    while (a < keep.length && !keep[a]) a++
+    let b = keep.length - 1
+    while (b > a && !keep[b]) b--
+    return [a, b] as const
+  }
+  const at = (px: number, py: number) => L[clampIndex(py, h) * w + clampIndex(px, w)]
+  const [r0, r1] = profile(x, y, ev.x, w, at)
+  const [c0, c1] = profile(y, x, ev.y, h, (py, px) => at(px, py))
+  if (r1 - r0 + 1 < MIN_CELLS || c1 - c0 + 1 < MIN_CELLS) return null
+  return [
+    { ...x, start: x.start + c0 * x.pitch, count: c1 - c0 + 1 },
+    { ...y, start: y.start + r0 * y.pitch, count: r1 - r0 + 1 },
+  ]
 }
 
-/** detectGrid for an image already validated and composited onto white. */
-export function detectGridOpaque(flat: RgbaImage): DetectedGrid | null {
-  const { width: w, height: h } = flat
+/**
+ * A straight, axis-aligned lattice in a luma image, or null. `gated` selects the line evidence of
+ * blurred photos (see lineEvidence); `hint` is the expected pitch along both axes when it is known
+ * (a rectified photo), which keeps moiré and half-pitch echoes from being taken for the lattice.
+ */
+export function detectStraight(L: Float32Array, w: number, h: number, gated: boolean, hint?: number): DetectedGrid | null {
   if (w < 16 || h < 16) return null
-  const L = luminance(flat)
-  const ev = computeEvidence(L, w, h)
-  let x = analyzeAxis(ev.x, 0, ev.x.bands, false)
-  let y = analyzeAxis(ev.y, 0, ev.y.bands, false)
+  const ev = computeEvidence(L, w, h, gated)
+  let x = analyzeAxis(ev.x, 0, ev.x.bands, false, hint)
+  let y = analyzeAxis(ev.y, 0, ev.y.bands, false, hint)
   if (!x || !y) return null
   for (let pass = 0; pass < 2; pass++) {
     const [r0, r1] = bandRange(y, ev.x.bands)
-    x = analyzeAxis(ev.x, r0, r1, true)
+    x = analyzeAxis(ev.x, r0, r1, true, hint, gated)
     if (!x) return null
     const [c0, c1] = bandRange(x, ev.y.bands)
-    y = analyzeAxis(ev.y, c0, c1, true)
+    y = analyzeAxis(ev.y, c0, c1, true, hint, gated)
     if (!y) return null
+  }
+  if (gated) {
+    const trimmed = trimMargins(L, w, h, ev, x, y)
+    if (!trimmed) return null
+    ;[x, y] = trimmed
   }
   const confidence = Math.min(x.confidence, y.confidence)
   if (confidence < MIN_CONFIDENCE) return null
