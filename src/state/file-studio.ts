@@ -2,7 +2,9 @@
 // crocheting progress. Pure reducer plus a defensive localStorage round trip.
 
 import {
+  DEFAULT_FILE_NAME,
   DEFAULT_READING,
+  FILE_NAME_MAX,
   emptyFileChart,
   fileCols,
   fileRows,
@@ -242,10 +244,21 @@ interface StoredStudio {
   progress: FileProgress
 }
 
+/** A name the document format accepts: no control characters, trimmed, at most 100 characters, never empty. */
+export function documentName(name: string): string {
+  const clean = [...name.replace(/[\p{Cc}\p{Cs}]/gu, '').trim()].slice(0, FILE_NAME_MAX).join('').trim()
+  return clean || DEFAULT_FILE_NAME
+}
+
+/** The chart as an exportable document (the name made valid for the format). */
+export function exportableDocument(chart: FileChart) {
+  return toFileDocument({ ...chart, name: documentName(chart.name) })
+}
+
 export function serializeFileStudio(state: FileStudioState): string {
   const stored: StoredStudio = {
     version: 1,
-    document: toFileDocument(state.chart),
+    document: exportableDocument(state.chart),
     mode: state.mode,
     reading: state.reading,
     progress: state.progress,

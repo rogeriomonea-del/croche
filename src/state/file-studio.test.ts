@@ -4,6 +4,7 @@ import {
   HISTORY_LIMIT,
   STORAGE_KEY,
   deserializeFileStudio,
+  documentName,
   fileStudioReducer as reduce,
   initialFileStudio,
   loadFileStudio,
@@ -239,6 +240,13 @@ describe('persistence', () => {
     expect(back.reading).toEqual({ turning: false, firstRowFrom: 'left' })
     expect(back.progress).toEqual(s.progress)
     expect(back.past).toEqual([])
+  })
+
+  it('stores a valid name even while the name field is empty or odd', () => {
+    const blank = deserializeFileStudio(serializeFileStudio(reduce(initialFileStudio(), { type: 'rename', name: '  ' })))!
+    expect(blank.chart.name).toBe('Gráfico filé')
+    expect(documentName(' Rosa\u0007 ' + 'x'.repeat(200))).toHaveLength(100)
+    expect(documentName(' Rosa\u0007 ')).toBe('Rosa')
   })
 
   it('ignores corrupt or foreign data', () => {
