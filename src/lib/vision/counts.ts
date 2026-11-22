@@ -21,7 +21,7 @@ const MIN_LINES = 0.75
 const MIN_ACTIVE = 0.5
 const SILENT = 0.25
 
-interface AxisResult {
+export interface AxisResult {
   axis: GridAxis
   confidence: number
 }
@@ -153,11 +153,27 @@ function fitAxis(at: (u: number, v: number) => number, n: number, b0: number, b1
 /**
  * A lattice of exactly `cols` x `rows` cells fitted inside `box` of the luma image `L`, with its
  * confidence (0 when the lines do not stand out from the cell middles on either axis), or null when
- * the box is too small for those counts.
+ * the box is too small for those counts. An axis given in `keep` (with its confidence) is taken as
+ * is and only the other one is fitted, its evidence read across the kept axis' extent.
  */
-export function fitKnownCounts(L: Float32Array, w: number, h: number, box: Box, cols: number, rows: number): DetectedGrid | null {
-  const x = fitAxis((u, v) => L[v * w + u], w, box.x, box.x + box.width, box.y, box.y + box.height, cols)
-  const y = fitAxis((u, v) => L[u * w + v], h, box.y, box.y + box.height, box.x, box.x + box.width, rows)
+export function fitKnownCounts(
+  L: Float32Array,
+  w: number,
+  h: number,
+  box: Box,
+  cols: number,
+  rows: number,
+  keep: { x?: AxisResult; y?: AxisResult } = {},
+): DetectedGrid | null {
+  const span = (a: GridAxis | undefined, lo: number, len: number, n: number): [number, number] => {
+    if (!a) return [lo, lo + len]
+    const a0 = Math.max(0, Math.floor(a.start))
+    return [a0, Math.max(a0 + 1, Math.min(n, Math.ceil(a.start + a.count * a.pitch)))]
+  }
+  const [y0, y1] = span(keep.y?.axis, box.y, box.height, h)
+  const [x0, x1] = span(keep.x?.axis, box.x, box.width, w)
+  const x = keep.x ?? fitAxis((u, v) => L[v * w + u], w, box.x, box.x + box.width, y0, y1, cols)
+  const y = keep.y ?? fitAxis((u, v) => L[u * w + v], h, box.y, box.y + box.height, x0, x1, rows)
   if (!x || !y) return null
   return { x: x.axis, y: y.axis, confidence: Math.min(x.confidence, y.confidence) }
 }

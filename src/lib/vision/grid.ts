@@ -58,8 +58,15 @@ const PHOTO_STRONG = 0.5
 /** An outer row or column of a photo lattice is kept when its crossing lines show at this fraction of their median support. */
 const TRIM_SUPPORT = 0.5
 /**
+ * Or when both signals are partial: crossing lines at this fraction of that floor and this fraction of
+ * dark cells (a mostly paper row whose faint lines fade in the blur, with a few ink cells; margins
+ * hold no whole ink cells).
+ */
+const PALE_SUPPORT = 0.6
+const PALE_DARK = 0.2
+/**
  * A photo row or column whose cells are trimmed is kept when its outer line is this strong relative to
- * both the typical line of its family and its own inner line (the chart border),
+ * its own inner line (the chart border; not to the typical line, which ink/paper steps inflate),
  */
 const BORDER_LINE = 1.3
 /** and its inner line at least this strong. */
@@ -576,7 +583,8 @@ function bandRange(fit: AxisFit, bands: number): [number, number] {
  * other family (its vertical lines) shows inside it, or when it is mostly dark (a solid row of ink
  * hides its lines in the blur), or when it is bounded on its outer side by a line well above the
  * typical line of its family with a visible line on its inner side: the border of the chart, which
- * keeps rows of plain paper cells whose faint lines vanish in the blur. Columns likewise.
+ * keeps rows of plain paper cells whose faint lines vanish in the blur, or when its crossing lines and
+ * its dark cells both show in part (a mostly paper row with a few ink cells). Columns likewise.
  */
 function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y: AxisData }, x: AxisFit, y: AxisFit): [AxisFit, AxisFit] | null {
   const lumas: number[] = []
@@ -607,10 +615,10 @@ function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y
     }
     const sorted = support.slice().sort((a, b) => a - b)
     const floor = TRIM_SUPPORT * sorted[sorted.length >> 1]
-    const keep = support.map((v, i) => v >= floor || darkness[i] >= 0.3)
+    const keep = support.map((v, i) => v >= floor || darkness[i] >= 0.3 || (v >= PALE_SUPPORT * floor && darkness[i] >= PALE_DARK))
     const typical = median(lines)
     const border = (outer: number, inner: number) =>
-      lines[outer] >= BORDER_LINE * Math.max(typical, lines[inner]) && lines[inner] >= VISIBLE_LINE * typical
+      lines[outer] >= BORDER_LINE * lines[inner] && lines[inner] >= VISIBLE_LINE * typical
     let a = 0
     while (a < keep.length && !keep[a] && !border(a, a + 1)) a++
     let b = keep.length - 1

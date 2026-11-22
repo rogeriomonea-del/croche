@@ -276,10 +276,15 @@ export function analyzeChartImage(image: RgbaImage, options: AnalyzeOptions = {}
   }
   if (!options.forceResample && forcedCols !== undefined && forcedRows !== undefined) {
     // Known counts and no grid found, or a grid of other counts (the user corrects the size): fit a
-    // lattice of exactly those counts to the line evidence, inside the content or inside the grid
-    // found widened by about a pitch per side (it may have lost or gained outer rows).
+    // lattice of exactly those counts to the line evidence, first inside the grid found widened by
+    // about a pitch per side (it may have lost or gained outer rows), then inside the content (which
+    // takes in axis numbers and margins). A straight grid's axis that already has the requested count
+    // is kept as found and only the other axis is fitted: refitting it could shift its lines by a cell
+    // (a band of axis numbers read as the first column). A fit whose lines do not stand out from the
+    // cell middles (confidence 0) is not reported as a grid: the content is resampled instead.
     const L = luminance(flat)
-    const boxes = [findContentBox(flat)]
+    const boxes: Box[] = []
+    const keep: Parameters<typeof fitKnownCounts>[6] = {}
     if (grid) {
       const box = gridBox(grid, flat)
       const x0 = Math.max(0, Math.floor(box.x - grid.x.pitch))
@@ -287,13 +292,14 @@ export function analyzeChartImage(image: RgbaImage, options: AnalyzeOptions = {}
       const x1 = Math.min(flat.width, Math.ceil(box.x + box.width + grid.x.pitch))
       const y1 = Math.min(flat.height, Math.ceil(box.y + box.height + grid.y.pitch))
       boxes.push({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+      if (!grid.mesh && forcedCols === grid.x.count) keep.x = { axis: grid.x, confidence: grid.confidence }
+      if (!grid.mesh && forcedRows === grid.y.count) keep.y = { axis: grid.y, confidence: grid.confidence }
     }
-    let fitted: DetectedGrid | null = null
+    boxes.push(findContentBox(flat))
     for (const box of boxes) {
-      const fit = fitKnownCounts(L, flat.width, flat.height, box, forcedCols, forcedRows)
-      if (fit && fit.confidence > 0 && (!fitted || fit.confidence > fitted.confidence)) fitted = fit
+      const fit = fitKnownCounts(L, flat.width, flat.height, box, forcedCols, forcedRows, keep)
+      if (fit && fit.confidence > 0) return gridResult(fit)
     }
-    if (fitted) return gridResult(fitted)
   }
 
   // No grid, a forced resample, or counts that disagree with the grid found and fit no lattice:
