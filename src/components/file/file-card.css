@@ -1,0 +1,12 @@
+/* The editor's creation row gains a third card: the filet studio. Loaded with the editor, while
+   the studio itself is loaded on demand. */
+.file-card { background: #f3ece0aa; border-color: #dccfb9; }
+.file-card .creation-card-icon { border-color: #cdb894; color: #8f7046; background: #eadcc048; }
+.file-card .creation-kicker { color: #9a7b4f; }
+.file-card strong { color: #5a4036; }
+@media (min-width: 1151px) {
+  .creation-launchpad:has(> .file-card) { grid-template-columns: repeat(3, minmax(0, 1fr)) 170px; }
+}
+@media (min-width: 681px) and (max-width: 1150px) {
+  .creation-launchpad:has(> .file-card) > .file-card { grid-column: 1 / -1; }
+}

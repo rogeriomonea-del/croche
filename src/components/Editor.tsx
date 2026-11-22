@@ -8,6 +8,7 @@ import {
   Plus,
   Eye,
   Grid3x3,
+  Rows3,
   Leaf,
   LoaderCircle,
   Lock,
@@ -20,7 +21,7 @@ import {
   UserRound,
   X as Close,
 } from 'lucide-react'
-import { useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useMemo, useReducer, useRef, useState } from 'react'
 import { ApiError, authApi, patternsApi } from '../api/client'
 import {
   cellsOf,
@@ -45,11 +46,15 @@ import { historyReducer, initialHistory } from '../state/history'
 import { Brand } from './Brand'
 import { TemplateGallery } from './TemplateGallery'
 import { PhotoPatternDialog } from './PhotoPatternDialog'
+import './file/file-card.css'
 import { AccountDialog } from './AccountDialog'
 import { InstructionsPanel } from './InstructionsPanel'
 import { LibraryPanel } from './LibraryPanel'
 import { MosaicGrid } from './MosaicGrid'
 import { Toolbar } from './Toolbar'
+
+// The filet studio (chart vision, canvas, reader) loads only when opened.
+const FileStudio = lazy(() => import('./file/FileStudio').then((m) => ({ default: m.FileStudio })))
 
 const HINT: Record<View, string> = {
   simulation: 'Clique para trocar a cor. O ponto alto correspondente é calculado na carreira acima.',
@@ -130,6 +135,7 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [accountOpen, setAccountOpen] = useState(false)
   const [creationPanel, setCreationPanel] = useState<'templates' | 'photo' | null>(null)
+  const [fileStudioOpen, setFileStudioOpen] = useState(false)
 
   // Bumped whenever another pattern takes over the editor, so a save still in flight for the old
   // one cannot stamp its id and revision onto the new one.
@@ -521,6 +527,21 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
             </span>
             <ArrowUpRight size={19} />
           </button>
+          <button
+            className="creation-card file-card"
+            onClick={() => setFileStudioOpen(true)}
+            aria-label="Abrir estúdio de filé"
+          >
+            <span className="creation-card-icon">
+              <Rows3 size={22} strokeWidth={1.3} />
+            </span>
+            <span>
+              <span className="creation-kicker">CROCHÊ FILÉ</span>
+              <strong>Leia carreira por carreira.</strong>
+              <small>Gráfico fiel e leitura guiada, sem tirar os olhos do fio.</small>
+            </span>
+            <ArrowUpRight size={19} />
+          </button>
           <button className="creation-blank" onClick={handleNew} aria-label="Criar padrão em branco">
             <Plus size={20} strokeWidth={1.4} />
             <span>
@@ -771,6 +792,11 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
           onClose={() => setCreationPanel(null)}
           onApply={applyCreation}
         />
+      )}
+      {fileStudioOpen && (
+        <Suspense fallback={null}>
+          <FileStudio onClose={() => setFileStudioOpen(false)} />
+        </Suspense>
       )}
       <AnimatePresence>
         {accountOpen && (
