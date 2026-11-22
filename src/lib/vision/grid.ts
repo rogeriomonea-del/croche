@@ -29,6 +29,18 @@ export interface DetectedGrid {
   mesh?: GridMesh
   /** Rotation of the grid in degrees (positive: clockwise on screen), when it was measured. */
   angle?: number
+  /** Straight detections: how closely the image follows the lattice. */
+  fit?: StraightFit
+}
+
+/** How closely a straight lattice matches the lines it was fitted to (worst of the two axes). */
+export interface StraightFit {
+  /** Fraction of the lattice lines inside the extent that were found strong. */
+  lines: number
+  /** RMS distance of the located lines from the lattice, in pitches. */
+  residual: number
+  /** Drift of the lattice between the two ends of its lines (a tilt or a bend), in pitches. */
+  skew: number
 }
 
 /** Evidence is accumulated in bands of this many pixels across the other axis. */
@@ -62,6 +74,14 @@ const MAX_ASPECT = 2
 const MEAN_RADIUS = 10
 /** How far (relative to the ridge's own depth) the sides of a gated ridge may sit on its side of the mean: blur darkens a line's sides too. */
 const GATE = 0.35
+/** A cut-off outer cell (at the image border) is kept when at least this fraction of it is in the picture, */
+const EDGE_COVER = 0.8
+/** the crossing grid lines show inside it at this fraction of their median support within the grid, */
+const EDGE_SUPPORT = 0.5
+/** and at least this fraction of its cells look like the chart's cells (uniform, ink or paper light). */
+const EDGE_CELLS = 0.8
+/** A cell is uniform when this fraction of its inner samples lies within the tolerance of its median. */
+const EDGE_UNIFORM = 0.6
 
 /** Per-axis accumulators. `ev` is band-major: index = band * n + position. */
 export interface AxisData {
@@ -77,6 +97,10 @@ interface AxisFit {
   pitch: number
   count: number
   confidence: number
+  /** Fraction of the lines in the extent found strong. */
+  strong: number
+  /** RMS of the located lines around the lattice, in pitches. */
+  residual: number
 }
 
 /**
@@ -480,7 +504,7 @@ function analyzeAxis(d: AxisData, b0: number, b1: number, coverage: boolean, hin
   const regularity = Math.max(0, 1 - fit.rms / (0.12 * fit.b))
   const periodicity = Math.max(0, Math.min(1, rho / 0.3))
   const confidence = strongFraction * (0.4 + 0.6 * regularity) * periodicity
-  return { start: fit.a + fit.b * bestStart, pitch: fit.b, count, confidence }
+  return { start: fit.a + fit.b * bestStart, pitch: fit.b, count, confidence, strong: strongFraction, residual: fit.rms / fit.b }
 }
 
 /** Bands across this axis that lie inside the fitted extent (at least one). */
@@ -546,6 +570,160 @@ function trimMargins(L: Float32Array, w: number, h: number, ev: { x: AxisData; y
   ]
 }
 
+/** Mean offset of the evidence of bands [b0, b1) around the lattice lines, in pixels. */
+function lineOffset(d: AxisData, b0: number, b1: number, fit: AxisFit): number {
+  const n = d.n
+  const r = Math.max(1, Math.floor(fit.pitch / 4))
+  const values = new Float64Array(2 * r + 1)
+  let acc = 0
+  let wsum = 0
+  for (let k = 0; k <= fit.count; k++) {
+    const c = fit.start + k * fit.pitch
+    const lo = Math.round(c - 0.5) - r
+    if (lo < 0 || lo + 2 * r >= n) continue
+    let min = Infinity
+    for (let i = 0; i <= 2 * r; i++) {
+      let v = 0
+      for (let b = b0; b < b1; b++) v += d.ev[b * n + lo + i]
+      values[i] = v
+      if (v < min) min = v
+    }
+    for (let i = 0; i <= 2 * r; i++) {
+      acc += (values[i] - min) * (lo + i + 0.5 - c)
+      wsum += values[i] - min
+    }
+  }
+  return wsum > 0 ? acc / wsum : 0
+}
+
+/** How far the lines of `fit` drift between the first and the last third of their length, in pitches. */
+function skew(d: AxisData, fit: AxisFit, across: AxisFit): number {
+  const [b0, b1] = bandRange(across, d.bands)
+  const third = Math.max(1, Math.floor((b1 - b0) / 3))
+  return Math.abs(lineOffset(d, b0, b0 + third, fit) - lineOffset(d, b1 - third, b1, fit)) / fit.pitch
+}
+
+/** Luma at integer pixel (u, v): u along the axis being extended, v across it. */
+type Pixel = (u: number, v: number) => number
+
+/**
+ * Support of the crossing lines `across` inside the strip [u0, u1] of the other axis: their line
+ * evidence minus the evidence in the middle of the cells, per line, averaged over the strip.
+ */
+function crossSupport(pixel: Pixel, nu: number, nv: number, u0: number, u1: number, across: AxisFit): number {
+  const a = Math.max(0, Math.ceil(u0 - 0.5))
+  const b = Math.min(nu - 1, Math.floor(u1 - 0.5))
+  if (b < a) return 0
+  const at = (u: number, v: number) =>
+    v < 2 || v > nv - 3 ? 0 : lineEvidence(pixel(u, v - 2), pixel(u, v - 1), pixel(u, v), pixel(u, v + 1), pixel(u, v + 2), 0, false)
+  const peak = (u: number, c: number) => {
+    const ci = Math.round(c - 0.5)
+    return Math.max(at(u, ci - 1), at(u, ci), at(u, ci + 1))
+  }
+  let total = 0
+  for (let u = a; u <= b; u++) {
+    let on = 0
+    let off = 0
+    for (let k = 0; k <= across.count; k++) on += peak(u, across.start + k * across.pitch)
+    for (let k = 0; k < across.count; k++) off += peak(u, across.start + (k + 0.5) * across.pitch)
+    total += on / (across.count + 1) - off / across.count
+  }
+  return total / (b - a + 1)
+}
+
+/** Up to 7 x 7 luma samples of the rectangle [u0, u1] x [v0, v1], clipped to the image. */
+function samples(pixel: Pixel, nu: number, nv: number, u0: number, u1: number, v0: number, v1: number): number[] {
+  const pick = (lo: number, hi: number, n: number) => {
+    const a = Math.max(0, Math.ceil(lo - 0.5))
+    const b = Math.min(n - 1, Math.floor(hi - 0.5))
+    if (b < a) return []
+    const len = Math.min(7, b - a + 1)
+    return Array.from({ length: len }, (_, t) => a + Math.floor(((t + 0.5) * (b - a + 1)) / len))
+  }
+  const out: number[] = []
+  const vs = pick(v0, v1, nv)
+  for (const u of pick(u0, u1, nu)) for (const v of vs) out.push(pixel(u, v))
+  return out
+}
+
+/**
+ * Adds the cells cut off by the image border (or lying past the last strong line) at both ends of
+ * `along`, one at a time, while each is mostly in the picture, the crossing lines of `across` run on
+ * through it and its cells have the chart's ink or paper light. Margins fail: page colour carries no
+ * crossing lines, and axis numbers and text sit mid-cell.
+ */
+function extendEdges(pixel: Pixel, nu: number, nv: number, along: AxisFit, across: AxisFit, levels: [number, number]): AxisFit {
+  const p = along.pitch
+  const supports: number[] = []
+  const step = Math.max(1, Math.floor(along.count / 12))
+  for (let j = 0; j < along.count; j += step) {
+    const c = along.start + j * p
+    supports.push(crossSupport(pixel, nu, nv, c + 0.15 * p, c + 0.85 * p, across))
+  }
+  const ref = median(supports)
+  if (ref <= 0) return along
+  const tol = Math.max(16, 0.25 * Math.abs(levels[1] - levels[0]))
+  const chartCell = (u0: number, u1: number, i: number) => {
+    const v = across.start + i * across.pitch
+    const values = samples(pixel, nu, nv, u0, u1, v + 0.25 * across.pitch, v + 0.75 * across.pitch)
+    if (!values.length) return false
+    const m = median(values)
+    if (Math.min(Math.abs(m - levels[0]), Math.abs(m - levels[1])) > tol) return false
+    return values.filter((value) => Math.abs(value - m) <= tol).length >= EDGE_UNIFORM * values.length
+  }
+  const accept = (c0: number) => {
+    const lo = Math.max(0, c0)
+    const hi = Math.min(nu, c0 + p)
+    if (hi - lo < EDGE_COVER * p) return false
+    if (crossSupport(pixel, nu, nv, lo + 0.15 * p, hi - 0.15 * p, across) < EDGE_SUPPORT * ref) return false
+    let good = 0
+    for (let i = 0; i < across.count; i++) if (chartCell(lo + 0.2 * p, hi - 0.2 * p, i)) good++
+    return good >= EDGE_CELLS * across.count
+  }
+  let { start, count } = along
+  while (accept(start - p)) {
+    start -= p
+    count++
+  }
+  while (accept(start + count * p)) count++
+  return { ...along, start, count }
+}
+
+/** The two lightness levels of the cells (ink and paper): two-means over the cells' median luma. */
+function cellLevels(L: Float32Array, w: number, h: number, x: AxisFit, y: AxisFit): [number, number] {
+  const pixel: Pixel = (u, v) => L[v * w + u]
+  const stride = Math.max(1, Math.round(Math.sqrt((x.count * y.count) / 4000)))
+  const values: number[] = []
+  for (let i = 0; i < y.count; i += stride) {
+    const v = y.start + i * y.pitch
+    for (let j = 0; j < x.count; j += stride) {
+      const u = x.start + j * x.pitch
+      const cell = samples(pixel, w, h, u + 0.25 * x.pitch, u + 0.75 * x.pitch, v + 0.25 * y.pitch, v + 0.75 * y.pitch)
+      if (cell.length) values.push(median(cell))
+    }
+  }
+  let lo = Math.min(...values)
+  let hi = Math.max(...values)
+  for (let it = 0; it < 10; it++) {
+    let sl = 0
+    let nl = 0
+    let sh = 0
+    let nh = 0
+    for (const v of values) {
+      if (Math.abs(v - lo) <= Math.abs(v - hi)) {
+        sl += v
+        nl++
+      } else {
+        sh += v
+        nh++
+      }
+    }
+    if (nl) lo = sl / nl
+    if (nh) hi = sh / nh
+  }
+  return [lo, hi]
+}
+
 /**
  * A straight, axis-aligned lattice in a luma image, or null. `gated` selects the line evidence of
  * blurred photos (see lineEvidence); `hint` is the expected pitch along both axes when it is known
@@ -574,9 +752,23 @@ export function detectStraight(L: Float32Array, w: number, h: number, gated: boo
   if (confidence < MIN_CONFIDENCE) return null
   // Chart cells are square or close to it; a lattice of much longer cells is text or texture.
   if (Math.max(x.pitch, y.pitch) > MAX_ASPECT * Math.min(x.pitch, y.pitch)) return null
+  const fit: StraightFit = {
+    lines: Math.min(x.strong, y.strong),
+    residual: Math.max(x.residual, y.residual),
+    skew: Math.max(skew(ev.x, x, y), skew(ev.y, y, x)),
+  }
+  if (!gated) {
+    // A screenshot cut by the image border: the outer cells have no line on their far side.
+    const levels = cellLevels(L, w, h, x, y)
+    const ex = extendEdges((u, v) => L[v * w + u], w, h, x, y, levels)
+    const ey = extendEdges((u, v) => L[u * w + v], h, w, y, x, levels)
+    x = ex
+    y = ey
+  }
   return {
     x: { start: x.start, pitch: x.pitch, count: x.count },
     y: { start: y.start, pitch: y.pitch, count: y.count },
     confidence,
+    fit,
   }
 }

@@ -412,6 +412,37 @@ export function invert(truth: boolean[][]): boolean[][] {
   return truth.map((row) => row.map((v) => !v))
 }
 
+/** The pixels [x0, x1) x [y0, y1) of `image` (a screenshot cut by the screen edges). */
+export function cropImage(image: RgbaImage, x0: number, y0: number, x1: number, y1: number): RgbaImage {
+  const width = x1 - x0
+  const height = y1 - y0
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) data.set(image.data.subarray(((y0 + y) * image.width + x0) * 4, ((y0 + y) * image.width + x1) * 4), y * width * 4)
+  return { width, height, data }
+}
+
+/**
+ * `truth` drawn as a full-bleed checkerboard-like weave: cells of `cellWidth` x `cellHeight` filling
+ * the whole image, no grid lines and no margin, each cell with a faint woven texture.
+ */
+export function renderBleed(truth: boolean[][], cellWidth: number, cellHeight: number, seed = 1): RgbaImage {
+  const rows = truth.length
+  const cols = truth[0].length
+  const width = Math.round(cols * cellWidth)
+  const height = Math.round(rows * cellHeight)
+  const random = seededRandom(seed)
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const ink = truth[Math.min(rows - 1, Math.floor(y / cellHeight))][Math.min(cols - 1, Math.floor(x / cellWidth))]
+      const texture = ((x + y) % 4 < 2 ? 6 : -6) + (random() * 2 - 1) * 5
+      const v = (ink ? 38 : 226) + texture
+      data.set([v, v, v, 255], (y * width + x) * 4)
+    }
+  }
+  return { width, height, data }
+}
+
 /** A page of monospaced "text": rows of letter-sized blobs on a 9 x 23 px lattice, no grid lines. */
 export function renderTextPage(seed: number, width = 700, height = 500): RgbaImage {
   const random = seededRandom(seed)

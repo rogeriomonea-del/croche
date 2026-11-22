@@ -1,10 +1,14 @@
 import { classifyCells } from './classify'
+import { fitKnownCounts } from './counts'
 import { detectGridOpaque } from './detect'
 import { type DetectedGrid, type GridMesh } from './grid'
-import { assertImage, findContentBox, opaque, type Box, type RgbaImage } from './image'
+import { assertImage, findContentBox, luminance, opaque, type Box, type RgbaImage } from './image'
 
 export interface AnalyzeOptions {
-  /** Force the cell counts (used when no grid is found, or to override). */
+  /**
+   * Force the cell counts. With both counts and no grid detected, a lattice of exactly these counts is
+   * fitted to the picture's line evidence (grid mode when it fits clearly, area resample otherwise).
+   */
   cols?: number
   rows?: number
   /** Ignore any grid and resample the content box to cols x rows. */
@@ -247,6 +251,20 @@ export function analyzeChartImage(image: RgbaImage, options: AnalyzeOptions = {}
   const forcedCols = options.cols === undefined ? undefined : clampCount(options.cols, 'colunas')
   const forcedRows = options.rows === undefined ? undefined : clampCount(options.rows, 'carreiras')
 
+  const gridResult = (found: DetectedGrid): ChartAnalysis => {
+    const cells = classifyCells(sampleGrid(flat, found), bias)
+    return {
+      mode: 'grid',
+      cols: found.x.count,
+      rows: found.y.count,
+      ...toMatrices(cells.ink, cells.certainty, found.x.count, found.y.count),
+      colors: cells.colors,
+      grid: found,
+      crop: gridBox(found, flat),
+      confidence: found.confidence,
+    }
+  }
+
   const grid = options.forceResample ? null : detectGridOpaque(flat)
   if (grid) {
     const fits =
@@ -254,19 +272,11 @@ export function analyzeChartImage(image: RgbaImage, options: AnalyzeOptions = {}
       (forcedRows === undefined || forcedRows === grid.y.count) &&
       grid.x.count <= MAX_COUNT &&
       grid.y.count <= MAX_COUNT
-    if (fits) {
-      const cells = classifyCells(sampleGrid(flat, grid), bias)
-      return {
-        mode: 'grid',
-        cols: grid.x.count,
-        rows: grid.y.count,
-        ...toMatrices(cells.ink, cells.certainty, grid.x.count, grid.y.count),
-        colors: cells.colors,
-        grid,
-        crop: gridBox(grid, flat),
-        confidence: grid.confidence,
-      }
-    }
+    if (fits) return gridResult(grid)
+  } else if (!options.forceResample && forcedCols !== undefined && forcedRows !== undefined) {
+    // Known counts, no grid found: fit a lattice of exactly those counts to the line evidence.
+    const fitted = fitKnownCounts(luminance(flat), flat.width, flat.height, findContentBox(flat), forcedCols, forcedRows)
+    if (fitted && fitted.confidence > 0) return gridResult(fitted)
   }
 
   // No grid, a forced resample, or counts that disagree with the grid found: average the content

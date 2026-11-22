@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { analyzeChartImage, detectGrid, findContentBox, suggestCellCounts, type RgbaImage } from './index'
-import { agreement, edgingTruth, randomTruth, renderChart, renderPicture } from './fixtures'
+import { agreement, edgingTruth, photograph, randomTruth, renderChart, renderPicture, renderTextPage } from './fixtures'
 
 function solid(width: number, height: number, rgba: [number, number, number, number]): RgbaImage {
   const data = new Uint8ClampedArray(width * height * 4)
@@ -129,6 +129,30 @@ describe('analyzeChartImage options', () => {
     const result = analyzeChartImage(solid(80, 60, [250, 250, 250, 255]))
     expect(result.mode).toBe('resample')
     expect(result.ink.flat().some(Boolean)).toBe(false)
+  })
+
+  it.each([
+    ['the edging, 12.4 px cells', edgingTruth(), 12.4, true],
+    ['a random 40 x 30 chart, 12.4 px cells', randomTruth(40, 30, 11), 12.4, true],
+    ['a random 30 x 24 chart, 10 px cells, no labels', randomTruth(30, 24, 7), 10, false],
+  ])('fits the given counts to a chart too blurred for grid detection: %s', (_name, truth, cellSize, labels) => {
+    const { image } = renderChart(truth, { cellSize, labels, seed: 3 })
+    const blurred = photograph(image, { blur: 4.5, noise: 6, seed: 5 })
+    expect(detectGrid(blurred)).toBeNull()
+    const result = analyzeChartImage(blurred, { cols: truth[0].length, rows: truth.length })
+    expect(result.mode).toBe('grid')
+    expect([result.cols, result.rows]).toEqual([truth[0].length, truth.length])
+    expect(agreement(result.ink, truth)).toBeGreaterThanOrEqual(0.99)
+  })
+
+  it('resamples when the given counts find no lattice in the picture', () => {
+    const picture = renderPicture(900, 700).image
+    for (const [cols, rows] of [[60, 40], [20, 15]]) {
+      const result = analyzeChartImage(picture, { cols, rows })
+      expect(result.mode).toBe('resample')
+      expect([result.cols, result.rows]).toEqual([cols, rows])
+    }
+    expect(analyzeChartImage(renderTextPage(2), { cols: 20, rows: 15 }).mode).toBe('resample')
   })
 
   it('still reads the chart in resample mode when its grid is forced away', () => {
