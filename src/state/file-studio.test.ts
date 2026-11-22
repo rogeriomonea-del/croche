@@ -49,6 +49,7 @@ describe('initial state', () => {
     expect(s.mode).toBe('editar')
     expect(s.reading).toEqual({ turning: true, firstRowFrom: 'right' })
     expect(s.progress).toEqual({ row: 1, segment: 0, doneRows: [] })
+    expect(s.autoRead).toBe(false)
   })
 })
 
@@ -240,6 +241,22 @@ describe('persistence', () => {
     expect(back.reading).toEqual({ turning: false, firstRowFrom: 'left' })
     expect(back.progress).toEqual(s.progress)
     expect(back.past).toEqual([])
+  })
+
+  it('remembers "Ler em voz alta ao avançar", and reads saves without it as off', () => {
+    const on = reduce(initialFileStudio(sample()), { type: 'setAutoRead', on: true })
+    expect(on.autoRead).toBe(true)
+    expect(reduce(on, { type: 'setAutoRead', on: true })).toBe(on)
+    expect(deserializeFileStudio(serializeFileStudio(on))!.autoRead).toBe(true)
+    expect(deserializeFileStudio(serializeFileStudio(reduce(on, { type: 'setAutoRead', on: false })))!.autoRead).toBe(false)
+
+    // A save from before the switch was remembered, and one with a foreign value.
+    const old = JSON.stringify({ version: 1, document: toFileDocument(sample()), mode: 'tecer', reading: { turning: true, firstRowFrom: 'right' }, progress: { row: 2, segment: 0, doneRows: [1] } })
+    const restored = deserializeFileStudio(old)!
+    expect(restored.autoRead).toBe(false)
+    expect(restored.mode).toBe('tecer')
+    expect(restored.progress.doneRows).toEqual([1])
+    expect(deserializeFileStudio(JSON.stringify({ ...JSON.parse(old), autoRead: 'sim' }))!.autoRead).toBe(false)
   })
 
   it('stores a valid name even while the name field is empty or odd', () => {

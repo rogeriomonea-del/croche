@@ -559,6 +559,15 @@ test('a chart screenshot is read cell by cell and adapted to the mosaic rules', 
   await expect(preview.locator('path')).not.toHaveAttribute('d', detectedPath!)
   await dialog.getByRole('slider', { name: /^Sensibilidade/ }).fill('0')
   await expect(preview.locator('path')).toHaveAttribute('d', detectedPath!)
+  // An upside-down chart can be turned before it becomes a mosaic; the reference turns with it.
+  const rotate = dialog.getByRole('button', { name: 'Girar 180°', exact: true })
+  await expect(rotate).toHaveAttribute('aria-pressed', 'false')
+  await rotate.click()
+  await expect(rotate).toHaveAttribute('aria-pressed', 'true')
+  await expect(preview.locator('path')).not.toHaveAttribute('d', detectedPath!)
+  await expect(dialog.getByRole('img', { name: 'Fotografia original selecionada, girada 180°', exact: true })).toBeVisible()
+  await rotate.click()
+  await expect(preview.locator('path')).toHaveAttribute('d', detectedPath!)
 
   // A manual size resamples the chart; the detected size comes back with one click.
   await dialog.getByRole('combobox', { name: 'Carreiras', exact: true }).selectOption('21')

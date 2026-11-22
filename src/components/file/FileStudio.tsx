@@ -39,14 +39,13 @@ export function FileStudio({ onClose }: FileStudioProps) {
   const [importing, setImporting] = useState(false)
   const [cell, setCell] = useState(12)
   const [autoFit, setAutoFit] = useState(true)
-  const [autoRead, setAutoRead] = useState(false)
   const speaker = useMemo(() => createSpeaker(), [])
   const wakeLock = useMemo(() => createWakeLock(), [])
   const latest = useRef(state)
   const speakNext = useRef(false)
   const spokenRow = useRef<number | null>(null)
 
-  const { chart, mode, reading: readingOptions, progress } = state
+  const { chart, mode, reading: readingOptions, progress, autoRead } = state
   const rows = fileRows(chart)
   const cols = fileCols(chart)
   const reading = useMemo(() => rowReading(chart, progress.row, readingOptions), [chart, progress.row, readingOptions])
@@ -76,7 +75,7 @@ export function FileStudio({ onClose }: FileStudioProps) {
     const timer = setTimeout(() => saveFileStudio(safeStorage(), state), SAVE_DELAY)
     return () => clearTimeout(timer)
     // The history is not saved: only these parts trigger a write.
-  }, [state.chart, state.mode, state.reading, state.progress])
+  }, [state.chart, state.mode, state.reading, state.progress, state.autoRead])
   useEffect(() => {
     const flush = () => saveFileStudio(safeStorage(), latest.current)
     window.addEventListener('pagehide', flush)
@@ -315,7 +314,7 @@ export function FileStudio({ onClose }: FileStudioProps) {
                   onToggleDone={() => dispatch({ type: 'toggleDone', row: reading.row })}
                   onSpeakRow={speakRow}
                   onSpeakSegment={speakSegment}
-                  onAutoRead={setAutoRead}
+                  onAutoRead={(on) => dispatch({ type: 'setAutoRead', on })}
                   onTurning={(turning) => dispatch({ type: 'setReading', turning })}
                   onFirstRowFrom={(firstRowFrom) => dispatch({ type: 'setReading', firstRowFrom })}
                 />

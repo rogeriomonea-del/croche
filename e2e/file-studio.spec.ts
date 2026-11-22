@@ -44,15 +44,19 @@ const MATRIX: boolean[][] = Array.from({ length: ROWS }, (_, i) =>
 )
 const EXPECTED: FileChart = fileChartFromTopFirst(MATRIX, { name: 'esperado', colors: { filled: '#b22234', open: '#ffffff' } })
 
-/** Draws the chart inside the page (margins, axis numbers, thin lines, thicker every 10) and returns PNG bytes. */
-async function renderChartPng(page: Page): Promise<Buffer> {
-  const dataUrl = await page.evaluate(({ matrix, cols, rows }) => {
+/**
+ * Draws the chart inside the page (margins, axis numbers, thin lines, thicker every 10) and returns PNG bytes.
+ * `upsideDown` turns the whole picture half a turn, numbers and watermark included, like a screenshot taken upside down.
+ */
+async function renderChartPng(page: Page, upsideDown = false): Promise<Buffer> {
+  const dataUrl = await page.evaluate(({ matrix, cols, rows, upsideDown }) => {
     const cell = 18
     const margin = { left: 46, top: 34, right: 28, bottom: 40 }
     const canvas = document.createElement('canvas')
     canvas.width = margin.left + cols * cell + margin.right
     canvas.height = margin.top + rows * cell + margin.bottom
     const ctx = canvas.getContext('2d')!
+    if (upsideDown) ctx.setTransform(-1, 0, 0, -1, canvas.width, canvas.height)
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     for (let i = 0; i < rows; i++) {
@@ -78,7 +82,7 @@ async function renderChartPng(page: Page): Promise<Buffer> {
     ctx.fillStyle = '#c8c8c8'
     ctx.fillText('gráfico de teste', canvas.width - 120, canvas.height - 6)
     return canvas.toDataURL('image/png')
-  }, { matrix: MATRIX, cols: COLS, rows: ROWS })
+  }, { matrix: MATRIX, cols: COLS, rows: ROWS, upsideDown })
   return Buffer.from(dataUrl.split(',')[1], 'base64')
 }
 
@@ -305,4 +309,86 @@ test('editing: tap toggles, a drag is one undo step, bad JSON is explained and E
   await page.keyboard.press('Escape')
   await expect(dialog).not.toBeVisible()
   await expect(launcher).toBeFocused()
+})
+
+test('an upside-down chart is turned before it is read; the size can be corrected and restored', async ({ page }) => {
+  await enterStudio(page)
+  const png = await renderChartPng(page, true)
+  const dialog = await openFileStudio(page)
+  await dialog.getByRole('button', { name: 'Importar foto ou gráfico', exact: true }).click()
+  await dialog.getByLabel('Escolher foto ou print do gráfico', { exact: true }).setInputFiles({ name: 'grafico-de-cabeca-para-baixo.png', mimeType: 'image/png', buffer: png })
+  await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  const rotate = dialog.getByRole('button', { name: 'Girar 180°', exact: true })
+  const mirror = dialog.getByRole('button', { name: 'Espelhar', exact: true })
+  const use = dialog.getByRole('button', { name: 'Usar este gráfico', exact: true })
+  await expect(rotate).toHaveAttribute('aria-pressed', 'false')
+  await expect(mirror).toHaveAttribute('aria-pressed', 'false')
+
+  // Size correction: another count re-reads the grid; the detected size comes back with one click.
+  await dialog.getByText('Corrigir tamanho', { exact: true }).click()
+  const colsField = dialog.getByRole('spinbutton', { name: 'Colunas', exact: true })
+  const rowsField = dialog.getByRole('spinbutton', { name: 'Carreiras', exact: true })
+  await expect(colsField).toHaveValue('30')
+  await expect(rowsField).toHaveValue('12')
+  await colsField.fill('31')
+  await expect(dialog.getByRole('img', { name: 'Gráfico lido: 31 × 12 quadradinhos' })).toBeVisible()
+  await expect(dialog.getByText('Lendo como 31 × 12 quadradinhos (tamanho corrigido).', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Usar tamanho detectado', exact: true }).click()
+  await expect(dialog.getByRole('img', { name: 'Gráfico lido: 30 × 12 quadradinhos' })).toBeVisible()
+  await expect(colsField).toHaveValue('30')
+  await expect(dialog.getByRole('button', { name: 'Usar tamanho detectado', exact: true })).toBeDisabled()
+
+  // A new analysis is visibly busy: spinner shown and the controls disabled until it is done.
+  await dialog.evaluate((node) => {
+    const seen = { busy: false }
+    ;(window as unknown as { busySeen: typeof seen }).busySeen = seen
+    new MutationObserver(() => {
+      const spinner = node.querySelector('.file-import-busy')
+      const buttons = ['Usar este gráfico', 'Girar 180°', 'Espelhar'].map((name) =>
+        [...node.querySelectorAll('button')].find((b) => b.textContent?.trim() === name),
+      )
+      if (spinner && buttons.every((b) => b?.disabled)) seen.busy = true
+    }).observe(node, { subtree: true, childList: true, attributes: true })
+  })
+  // Rapid changes: only the last value's reading may end up on screen.
+  const sensitivity = dialog.getByRole('slider', { name: /^Sensibilidade/ })
+  await sensitivity.fill('1')
+  await sensitivity.fill('-1')
+  await sensitivity.fill('0')
+  await expect.poll(() => page.evaluate(() => (window as unknown as { busySeen: { busy: boolean } }).busySeen.busy)).toBe(true)
+  await expect(use).toBeEnabled()
+  await expect(rotate).toBeEnabled()
+
+  // Turn it: the reference is shown the way it is read.
+  await expect(dialog.getByRole('img', { name: 'Imagem de referência importada', exact: true })).toBeVisible()
+  await rotate.click()
+  await expect(rotate).toHaveAttribute('aria-pressed', 'true')
+  await expect(dialog.getByRole('img', { name: 'Imagem de referência importada, girada 180°', exact: true })).toBeVisible()
+  await mirror.click()
+  await expect(dialog.getByRole('img', { name: 'Imagem de referência importada, girada 180°, espelhada', exact: true })).toBeVisible()
+  await mirror.click()
+  await expect(mirror).toHaveAttribute('aria-pressed', 'false')
+  await dialog.evaluate((node) => node.scrollTo({ top: 0 }))
+  await shot(page, 'file-studio-import-orientation-desktop.png')
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page, dialog)
+  await dialog.getByRole('group', { name: 'Orientação do gráfico' }).scrollIntoViewIfNeeded()
+  await shot(page, 'file-studio-import-orientation-mobile.png')
+  await page.setViewportSize({ width: 1440, height: 1000 })
+
+  await use.click()
+  await expect(dialog.getByText('12 carreiras × 30 colunas', { exact: false })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Tecer', exact: true }).click()
+  const row1 = rowReading(EXPECTED, 1)
+  await dialog.getByRole('region', { name: 'Receita completa' }).getByRole('button', { name: row1.text }).click()
+  await expect(dialog.locator('.file-reader').getByRole('heading', { name: 'Carreira 1 de 12' })).toBeVisible()
+  await expect(dialog.getByTestId('file-reader-text')).toHaveText(row1.text)
+
+  // The orientation starts over with a new picture.
+  await dialog.getByRole('button', { name: 'Editar', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Importar foto ou gráfico', exact: true }).click()
+  await dialog.getByLabel('Escolher foto ou print do gráfico', { exact: true }).setInputFiles({ name: 'grafico-de-cabeca-para-baixo.png', mimeType: 'image/png', buffer: png })
+  await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Girar 180°', exact: true })).toHaveAttribute('aria-pressed', 'false')
 })
