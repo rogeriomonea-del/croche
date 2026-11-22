@@ -550,7 +550,7 @@ test('a chart screenshot is read cell by cell and adapted to the mosaic rules', 
   await expect(dialog.getByRole('combobox', { name: 'Carreiras', exact: true })).toHaveValue('17')
   await expect(dialog.getByRole('combobox', { name: 'Pontos por carreira', exact: true })).toHaveValue('40')
   await expect(dialog.getByText(/^O mosaico overlay adapta o gráfico às regras de pontos altos/)).toBeVisible()
-  await expect(dialog.getByRole('button', { name: 'Abrir no Estúdio de filé' })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: 'Abrir no Estúdio de filé' })).toBeVisible()
   await expect(dialog.getByRole('slider', { name: /^Sensibilidade/ })).toBeVisible()
   await expect(dialog.getByRole('slider', { name: /^Contraste/ })).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: '1 carreira por linha', exact: true })).toHaveAttribute('aria-pressed', 'true')

@@ -791,6 +791,10 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
           colors={design.colors}
           onClose={() => setCreationPanel(null)}
           onApply={applyCreation}
+          onOpenFileStudio={() => {
+            setCreationPanel(null)
+            setFileStudioOpen(true)
+          }}
         />
       )}
       {fileStudioOpen && (
