@@ -83,6 +83,33 @@
 .file-chart-scroll.is-editar .file-chart-canvas { touch-action: none; cursor: crosshair; }
 .file-chart-scroll.is-tecer .file-chart-canvas { cursor: pointer; }
 
+/* Reading strip (Tecer on a phone): sticks to the top of the screen while the chart is in view. */
+.file-strip {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 -4px;
+  padding: 8px 10px;
+  border: 2px solid #b7915d;
+  border-radius: 12px;
+  background: #fbf3e3;
+  box-shadow: 0 6px 18px #52384e24;
+}
+.file-strip-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 0; color: #8c7383; font-size: 13px; }
+.file-strip-row strong { color: #52384e; font-size: 17px; font-weight: 700; }
+.file-strip-direction { display: inline-flex; align-items: center; gap: 4px; color: #52384e; font-weight: 500; }
+.file-strip-direction svg { align-self: center; }
+.file-strip-current { display: grid; gap: 1px; margin: 0; min-width: 0; }
+.file-strip-step { color: #8a6438; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+.file-strip-current strong { display: flex; align-items: center; gap: 8px; color: #3f2c2a; font-size: 22px; font-weight: 700; line-height: 1.15; }
+.file-strip-current .file-swatch { width: 20px; height: 20px; }
+.file-strip-nav { display: flex; gap: 6px; }
+.file-strip-nav .file-nav-button { min-width: 52px; min-height: 48px; padding: 6px 10px; font-size: 18px; }
+
 /* Edit panel */
 .file-panel { display: grid; gap: 14px; padding: 16px; border: 1px solid #e3d7c7; border-radius: 14px; background: #f7f0e6; }
 .file-history { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -202,6 +229,7 @@
   .file-chart-panel { grid-column: 1; grid-row: 1; }
   .file-recipe { grid-column: 1; grid-row: 2; }
   .file-chart-scroll, .file-studio-main.is-tecer .file-chart-scroll { max-height: min(70dvh, 760px); }
+  .file-strip { display: none; }
   .file-recipe ol { max-height: 420px; overflow: auto; scrollbar-width: thin; }
   .file-import { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
   .file-import-drop, .file-import-compare, .file-import > .file-error, .file-import-actions { grid-column: 1; }

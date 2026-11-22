@@ -137,3 +137,49 @@ export function FileReader(props: FileReaderProps) {
     </section>
   )
 }
+
+interface FileReadingStripProps {
+  reading: RowReading
+  rows: number
+  segment: number
+  onMoveSegment: (delta: number) => void
+}
+
+/**
+ * The current row and segment in one compact band, kept in sight while the chart is on a phone
+ * screen (the full reader sits above the chart there): a tap on the chart is answered right where
+ * the finger is. Hidden on wide screens, where the reader is a sticky side column.
+ */
+export function FileReadingStrip({ reading, rows, segment, onMoveSegment }: FileReadingStripProps) {
+  const count = reading.segments.length
+  const current = Math.min(segment, count - 1)
+  const currentSegment = reading.segments[current]
+  const kind = currentSegment.type === 'run' ? currentSegment.run.kind : 'repeat'
+  const Arrow = reading.side === 'right' ? ArrowLeft : ArrowRight
+  return (
+    <div className="file-strip" role="group" aria-label="Leitura atual" data-testid="file-strip">
+      <p className="file-strip-row">
+        <strong>Carreira {reading.row}</strong> <span>de {rows}</span>
+        <span className="file-strip-direction">
+          <Arrow size={16} strokeWidth={2.4} aria-hidden="true" />
+          {reading.direction}
+        </span>
+      </p>
+      <p className="file-strip-current">
+        <span className="file-strip-step">Trecho {current + 1} de {count}</span>
+        <strong>
+          <i className={`file-swatch is-${kind}`} aria-hidden="true" />
+          {segmentLabel(currentSegment)}
+        </strong>
+      </p>
+      <div className="file-strip-nav">
+        <button type="button" className="file-nav-button" aria-label="Trecho anterior" onClick={() => onMoveSegment(-1)} disabled={reading.row === 1 && current === 0}>
+          ◀
+        </button>
+        <button type="button" className="file-nav-button is-strong" aria-label="Próximo trecho" onClick={() => onMoveSegment(1)} disabled={reading.row === rows && current === count - 1}>
+          ▶
+        </button>
+      </div>
+    </div>
+  )
+}

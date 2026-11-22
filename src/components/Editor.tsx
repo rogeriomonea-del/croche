@@ -46,6 +46,9 @@ import { historyReducer, initialHistory } from '../state/history'
 import { Brand } from './Brand'
 import { TemplateGallery } from './TemplateGallery'
 import { PhotoPatternDialog } from './PhotoPatternDialog'
+import { FileStudioBoundary } from './file/FileStudioBoundary'
+import { failedImportUrl, freshUrl, relinkFailedStylesheets } from './file/retry-import'
+import type { ImportSeed } from './file/FileImport'
 import './file/file-card.css'
 import { AccountDialog } from './AccountDialog'
 import { InstructionsPanel } from './InstructionsPanel'
@@ -54,7 +57,21 @@ import { MosaicGrid } from './MosaicGrid'
 import { Toolbar } from './Toolbar'
 
 // The filet studio (chart vision, canvas, reader) loads only when opened.
-const FileStudio = lazy(() => import('./file/FileStudio').then((m) => ({ default: m.FileStudio })))
+let fileStudioRetries = 0
+
+async function importFileStudio(retry: boolean): Promise<typeof import('./file/FileStudio')> {
+  try {
+    return await import('./file/FileStudio')
+  } catch (error) {
+    // The browser keeps a failed fetch for its URL: on a retry, ask for the same file anew.
+    const url = retry ? failedImportUrl(error) : null
+    if (!url) throw error
+    return import(/* @vite-ignore */ freshUrl(url, ++fileStudioRetries))
+  }
+}
+
+/** The filet studio, loaded on demand. React keeps a failed import: each retry is a new lazy component. */
+const lazyFileStudio = (retry = false) => lazy(() => importFileStudio(retry).then((m) => ({ default: m.FileStudio })))
 
 const HINT: Record<View, string> = {
   simulation: 'Clique para trocar a cor. O ponto alto correspondente é calculado na carreira acima.',
@@ -136,6 +153,17 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
   const [accountOpen, setAccountOpen] = useState(false)
   const [creationPanel, setCreationPanel] = useState<'templates' | 'photo' | null>(null)
   const [fileStudioOpen, setFileStudioOpen] = useState(false)
+  /** A picture handed over by the photo converter: the studio opens on its import with it. */
+  const [fileStudioSeed, setFileStudioSeed] = useState<ImportSeed | null>(null)
+  const [FileStudio, setFileStudio] = useState(() => lazyFileStudio())
+  const [fileStudioAttempt, setFileStudioAttempt] = useState(0)
+
+  /** After the studio failed to load: the next opening fetches what failed anew. */
+  function reloadFileStudio() {
+    relinkFailedStylesheets(document, ++fileStudioRetries)
+    setFileStudio(() => lazyFileStudio(true))
+    setFileStudioAttempt((n) => n + 1)
+  }
 
   // Bumped whenever another pattern takes over the editor, so a save still in flight for the old
   // one cannot stamp its id and revision onto the new one.
@@ -529,7 +557,10 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
           </button>
           <button
             className="creation-card file-card"
-            onClick={() => setFileStudioOpen(true)}
+            onClick={() => {
+              setFileStudioSeed(null)
+              setFileStudioOpen(true)
+            }}
             aria-label="Abrir estúdio de filé"
           >
             <span className="creation-card-icon">
@@ -791,16 +822,26 @@ export function Editor({ user, onLoggedOut }: EditorProps) {
           colors={design.colors}
           onClose={() => setCreationPanel(null)}
           onApply={applyCreation}
-          onOpenFileStudio={() => {
+          onOpenFileStudio={(seed) => {
             setCreationPanel(null)
+            setFileStudioSeed(seed)
             setFileStudioOpen(true)
           }}
         />
       )}
       {fileStudioOpen && (
-        <Suspense fallback={null}>
-          <FileStudio onClose={() => setFileStudioOpen(false)} />
-        </Suspense>
+        <FileStudioBoundary
+          key={fileStudioAttempt}
+          onRetry={reloadFileStudio}
+          onClose={() => {
+            reloadFileStudio()
+            setFileStudioOpen(false)
+          }}
+        >
+          <Suspense fallback={null}>
+            <FileStudio initialImport={fileStudioSeed ?? undefined} onClose={() => setFileStudioOpen(false)} />
+          </Suspense>
+        </FileStudioBoundary>
       )}
       <AnimatePresence>
         {accountOpen && (

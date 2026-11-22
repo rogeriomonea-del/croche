@@ -1,7 +1,8 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
-import { fileChartFromTopFirst, rowReading, type FileChart } from '../src/file'
+import { segmentLabel } from '../src/components/file/geometry'
+import { fileChartFromTopFirst, rowReading, toFileDocument, type FileChart } from '../src/file'
 
 declare global {
   interface Window { cspViolations: string[] }
@@ -391,4 +392,309 @@ test('an upside-down chart is turned before it is read; the size can be correcte
   await dialog.getByLabel('Escolher foto ou print do gráfico', { exact: true }).setInputFiles({ name: 'grafico-de-cabeca-para-baixo.png', mimeType: 'image/png', buffer: png })
   await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Girar 180°', exact: true })).toHaveAttribute('aria-pressed', 'false')
+})
+
+/** A 90 x 31 chart, the size of the reference print that started the studio (row 0 = top). */
+const WIDE: FileChart = fileChartFromTopFirst(
+  Array.from({ length: 31 }, (_, i) => Array.from({ length: 90 }, (_, j) => (i * 7 + j * 3) % 11 < 4 || j % 15 === i % 15)),
+  { name: 'Toalha 90 × 31', colors: { filled: '#b22234', open: '#ffffff' } },
+)
+
+async function loadChartJson(dialog: Locator, chart: FileChart) {
+  await dialog.getByLabel('Escolher arquivo JSON do gráfico filé', { exact: true }).setInputFiles({
+    name: 'toalha.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(toFileDocument(chart))),
+  })
+}
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+
+  test('Tecer: a tap on the chart or on a row number picks that row, and its reading is on screen', async ({ page }) => {
+    await enterStudio(page)
+    const dialog = await openFileStudio(page)
+    await loadChartJson(dialog, WIDE)
+    await expect(dialog.getByText('31 carreiras × 90 colunas', { exact: false })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Tecer', exact: true }).click()
+
+    // Rows tall enough for a fingertip; the wide chart scrolls sideways inside its own panel.
+    const canvas = dialog.getByRole('img', { name: /^Gráfico filé/ })
+    const geometry = () => canvas.evaluate((el) => ['cell', 'gutter', 'top', 'rows'].map((k) => Number((el as HTMLElement).dataset[k])))
+    await expect.poll(async () => (await geometry())[0]).toBeGreaterThanOrEqual(14)
+    const [cell, gutter, top, rows] = await geometry()
+    await expectNoHorizontalOverflow(page, dialog)
+
+    // Tap the middle of row 7, where it is drawn.
+    await canvas.tap({ position: { x: gutter + 44.5 * cell, y: top + (rows - 7 + 0.5) * cell } })
+    await expect(dialog.locator('.file-reader').getByRole('heading', { name: 'Carreira 7 de 31' })).toBeAttached()
+    const strip = dialog.getByRole('group', { name: 'Leitura atual' })
+    const row7 = rowReading(WIDE, 7)
+    await expect(strip).toContainText('Carreira 7 de 31')
+    await expect(strip).toContainText(row7.direction)
+    await expect(strip).toContainText(`Trecho 1 de ${row7.segments.length}`)
+    await expect(strip).toContainText(segmentLabel(row7.segments[0]))
+    await expect(strip).toBeInViewport({ ratio: 1 })
+    await shot(page, 'tecer-mobile-tap.png')
+
+    // The strip moves along the row.
+    await strip.getByRole('button', { name: 'Próximo trecho', exact: true }).tap()
+    await expect(strip).toContainText(`Trecho 2 de ${row7.segments.length}`)
+    await expect(strip).toContainText(segmentLabel(row7.segments[1]))
+    await expect(dialog.locator('.file-reader').getByText(`Trecho 2 de ${row7.segments.length}`, { exact: true })).toBeAttached()
+
+    // The row numbers on either side are tap targets too.
+    await canvas.tap({ position: { x: gutter / 2, y: top + (rows - 12 + 0.5) * cell } })
+    const row12 = rowReading(WIDE, 12)
+    await expect(strip).toContainText('Carreira 12 de 31')
+    await expect(strip).toContainText(segmentLabel(row12.segments[0]))
+    await expect(strip).toBeInViewport({ ratio: 1 })
+    const width = Number(await canvas.evaluate((el) => (el as HTMLCanvasElement).style.width.replace('px', '')))
+    await canvas.tap({ position: { x: width - gutter / 2, y: top + (rows - 13 + 0.5) * cell } })
+    await expect(strip).toContainText('Carreira 13 de 31')
+    await expect(strip).toBeInViewport({ ratio: 1 })
+    await expectNoHorizontalOverflow(page, dialog)
+
+    // Wide screens keep the side reader and need no strip.
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await expect(strip).toBeHidden()
+    await dialog.evaluate((node) => node.scrollTo({ top: 0 }))
+    await expect(dialog.locator('.file-reader').getByRole('heading', { name: 'Carreira 13 de 31' })).toBeInViewport()
+  })
+})
+
+test('a studio that fails to download leaves the editor and its unsaved changes in place', async ({ page }) => {
+  await enterStudio(page)
+  const name = page.getByLabel('Nome do padrão', { exact: true })
+  await name.fill('Mosaico ainda não salvo')
+  let blocked = true
+  await page.route(/\/assets\/FileStudio-[^/]+\.js(\?.*)?$/, (route) => (blocked ? route.abort('internetdisconnected') : route.continue()))
+  const launcher = page.getByRole('button', { name: 'Abrir estúdio de filé', exact: true })
+  await launcher.click()
+  const notice = page.getByRole('alertdialog', { name: 'O Estúdio de filé não abriu' })
+  await expect(notice).toBeVisible()
+  await expect(notice).toContainText('Verifique a conexão com a internet e tente novamente.')
+  await expect(name).toHaveValue('Mosaico ainda não salvo')
+  await notice.getByRole('button', { name: 'Fechar', exact: true }).click()
+  await expect(notice).toBeHidden()
+  await expect(name).toBeVisible()
+  await expect(name).toHaveValue('Mosaico ainda não salvo')
+
+  // Still offline: the retry fails the same way; once back online it opens the studio.
+  await launcher.click()
+  await expect(notice).toBeVisible()
+  await notice.getByRole('button', { name: 'Tentar novamente', exact: true }).click()
+  await expect(notice).toBeVisible()
+  blocked = false
+  await notice.getByRole('button', { name: 'Tentar novamente', exact: true }).click()
+  const studio = page.getByRole('dialog', { name: 'Estúdio de filé' })
+  await expect(studio).toBeVisible()
+  await expect(notice).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(studio).toBeHidden()
+  await expect(name).toHaveValue('Mosaico ainda não salvo')
+})
+
+test('offline: the studio code and its styles both load on the retry once back online', async ({ page }) => {
+  await enterStudio(page)
+  let offline = true
+  await page.route(/\/assets\/FileStudio-[^/]+\.(js|css)(\?.*)?$/, (route) => (offline ? route.abort('internetdisconnected') : route.continue()))
+  await page.getByRole('button', { name: 'Abrir estúdio de filé', exact: true }).click()
+  const notice = page.getByRole('alertdialog', { name: 'O Estúdio de filé não abriu' })
+  await expect(notice).toBeVisible()
+  offline = false
+  await notice.getByRole('button', { name: 'Tentar novamente', exact: true }).click()
+  const studio = page.getByRole('dialog', { name: 'Estúdio de filé' })
+  await expect(studio).toBeVisible()
+  // Styled: the studio's own stylesheet arrived too.
+  await expect(studio).toHaveCSS('background-color', 'rgb(246, 242, 235)')
+  await expect(studio.getByRole('button', { name: 'Fechar estúdio de filé', exact: true })).toHaveCSS('border-radius', '50%')
+})
+
+test('reading aloud speaks when the position moves, not later on an unrelated change', async ({ page }) => {
+  await page.addInitScript(() => {
+    const spoken: string[] = []
+    ;(window as unknown as { spoken: string[] }).spoken = spoken
+    class FakeUtterance {
+      lang = ''
+      rate = 1
+      voice: unknown = null
+      constructor(public text: string) {}
+    }
+    Object.defineProperty(window, 'SpeechSynthesisUtterance', { value: FakeUtterance, configurable: true })
+    Object.defineProperty(window, 'speechSynthesis', {
+      value: { speak: (u: { text: string }) => spoken.push(u.text), cancel() {}, getVoices: () => [] },
+      configurable: true,
+    })
+  })
+  const spoken = () => page.evaluate(() => (window as unknown as { spoken: string[] }).spoken.slice())
+  await enterStudio(page)
+  const dialog = await openFileStudio(page)
+  await dialog.getByRole('button', { name: 'Tecer', exact: true }).click()
+  const reader = dialog.locator('.file-reader')
+  await reader.getByText('Ler em voz alta ao avançar', { exact: true }).click()
+  await expect(reader.getByRole('switch', { name: 'Ler em voz alta ao avançar' })).toBeChecked()
+  await expect(reader.getByRole('heading', { name: 'Carreira 1 de 10' })).toBeVisible()
+
+  // ↓ on row 1 goes nowhere: nothing is said, then or later.
+  await reader.getByRole('button', { name: 'Carreira feita', exact: true }).focus()
+  await page.keyboard.press('ArrowDown')
+  await reader.getByLabel('Ida e volta (virar o trabalho)', { exact: true }).uncheck()
+  await expect(reader.getByText('da direita para a esquerda', { exact: true })).toBeVisible()
+  await page.waitForTimeout(300)
+  expect(await spoken()).toEqual([])
+
+  // ↑ moves to row 2: said once, with the row's header.
+  await reader.getByRole('button', { name: 'Carreira feita', exact: true }).focus()
+  await page.keyboard.press('ArrowUp')
+  await expect(reader.getByRole('heading', { name: 'Carreira 2 de 10' })).toBeVisible()
+  expect(await spoken()).toEqual(['Carreira 2, da direita para a esquerda. 20 abertos.'])
+})
+
+/** Draws a 30 x 12 chart whose squares take the given colours, with grid lines and axis numbers. */
+async function renderColouredChart(page: Page, colours: string[][]): Promise<Buffer> {
+  const dataUrl = await page.evaluate((colours) => {
+    const rows = colours.length
+    const cols = colours[0].length
+    const cell = 18
+    const margin = { left: 46, top: 34, right: 28, bottom: 40 }
+    const canvas = document.createElement('canvas')
+    canvas.width = margin.left + cols * cell + margin.right
+    canvas.height = margin.top + rows * cell + margin.bottom
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        ctx.fillStyle = colours[i][j]
+        ctx.fillRect(margin.left + j * cell, margin.top + i * cell, cell, cell)
+      }
+    }
+    for (let k = 0; k <= cols; k++) {
+      const major = k % 10 === 0
+      ctx.fillStyle = major ? '#404040' : '#9a9a9a'
+      ctx.fillRect(margin.left + k * cell - (major ? 1 : 0), margin.top, major ? 2 : 1, rows * cell)
+    }
+    for (let k = 0; k <= rows; k++) {
+      const major = (rows - k) % 10 === 0
+      ctx.fillStyle = major ? '#404040' : '#9a9a9a'
+      ctx.fillRect(margin.left, margin.top + k * cell - (major ? 1 : 0), cols * cell, major ? 2 : 1)
+    }
+    ctx.fillStyle = '#555555'
+    ctx.font = '11px sans-serif'
+    for (let r = 1; r <= rows; r++) ctx.fillText(String(r), 8, margin.top + (rows - r) * cell + 13)
+    for (let c = 5; c <= cols; c += 5) ctx.fillText(String(c), margin.left + (c - 1) * cell + 3, margin.top + rows * cell + 18)
+    return canvas.toDataURL('image/png')
+  }, colours)
+  return Buffer.from(dataUrl.split(',')[1], 'base64')
+}
+
+/** Squares shown as fechado in the import's "Gráfico lido" preview (30 x 12). */
+async function previewFechados(dialog: Locator): Promise<number> {
+  return dialog.getByRole('img', { name: 'Gráfico lido: 30 × 12 quadradinhos' }).evaluate((element) => {
+    const canvas = element as HTMLCanvasElement
+    const ctx = canvas.getContext('2d')!
+    const cw = canvas.width / 30
+    const ch = canvas.height / 12
+    let count = 0
+    for (let i = 0; i < 12; i++) {
+      for (let j = 0; j < 30; j++) if (ctx.getImageData(Math.floor((j + 0.5) * cw), Math.floor((i + 0.5) * ch), 1, 1).data[1] < 180) count++
+    }
+    return count
+  })
+}
+
+/** Counts, from now on, how often the element matching `selector` inside `scope` goes away (an analysis finished). */
+async function countSpinnerEnds(scope: Locator, selector: string) {
+  await scope.evaluate((node, selector) => {
+    const state = { ends: 0, busy: !!node.querySelector(selector) }
+    ;(window as unknown as { spinnerState: typeof state }).spinnerState = state
+    new MutationObserver(() => {
+      const now = !!node.querySelector(selector)
+      if (state.busy && !now) state.ends++
+      state.busy = now
+    }).observe(node, { subtree: true, childList: true })
+  }, selector)
+  return () => scope.page().evaluate(() => (window as unknown as { spinnerState: { ends: number } }).spinnerState.ends)
+}
+
+test('import: Sensibilidade reads the picture once it settles, and right always means more fechados', async ({ page }) => {
+  await enterStudio(page)
+  // Ink, paper and an in-between tone the sensitivity decides about.
+  const colours = MATRIX.map((line, i) => line.map((ink, j) => (ink ? '#b22234' : (i + j) % 4 === 0 ? '#d98f99' : '#ffffff')))
+  const png = await renderColouredChart(page, colours)
+  const dialog = await openFileStudio(page)
+  await dialog.getByRole('button', { name: 'Importar foto ou gráfico', exact: true }).click()
+  await dialog.getByLabel('Escolher foto ou print do gráfico', { exact: true }).setInputFiles({ name: 'tons.png', mimeType: 'image/png', buffer: png })
+  await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  const use = dialog.getByRole('button', { name: 'Usar este gráfico', exact: true })
+  await expect(use).toBeEnabled()
+  const sensitivity = dialog.getByRole('slider', { name: /^Sensibilidade/ })
+
+  // Dragging: no analysis while the slider moves, one when it rests.
+  const ends = await countSpinnerEnds(dialog, '.file-import-busy')
+  for (const value of ['0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8']) {
+    await sensitivity.fill(value)
+    await page.waitForTimeout(40)
+  }
+  expect(await ends()).toBe(0)
+  await expect(use).toBeEnabled()
+  expect(await ends()).toBe(1)
+  await expect(dialog.getByText('+0.80', { exact: true })).toBeVisible()
+
+  // Plain reading: right gives more fechados.
+  const plainMore = await previewFechados(dialog)
+  await sensitivity.fill('-0.8')
+  await expect(use).toBeEnabled()
+  const plainLess = await previewFechados(dialog)
+  expect(plainMore).toBeGreaterThan(plainLess)
+
+  // Inverted: still more fechados to the right, as the hint says.
+  await dialog.getByLabel('Inverter fechado/aberto', { exact: true }).check()
+  await expect(use).toBeEnabled()
+  const invertedLess = await previewFechados(dialog)
+  await sensitivity.fill('0.8')
+  await expect(use).toBeEnabled()
+  const invertedMore = await previewFechados(dialog)
+  expect(invertedMore).toBeGreaterThan(invertedLess)
+  await expect(dialog.getByText(/^Para a esquerda, menos quadradinhos fechados; para a direita, mais/)).toBeVisible()
+})
+
+test('a chart sent from the mosaic converter opens in the studio import, already read', async ({ page }) => {
+  await enterStudio(page)
+  const png = await renderChartPng(page)
+  await page.getByRole('button', { name: 'Converter foto em pontos', exact: true }).click()
+  const converter = page.getByRole('dialog', { name: 'Da fotografia ao fio.' })
+  await converter.getByLabel('Selecionar foto de crochê', { exact: true }).setInputFiles({ name: 'toalha-da-vo.png', mimeType: 'image/png', buffer: png })
+  await expect(converter.getByText('Gráfico detectado: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  await expect(converter.getByRole('img', { name: 'Prévia do mosaico convertido' })).toBeVisible()
+
+  // Its Sensibilidade also waits for the slider to rest.
+  const apply = converter.getByRole('button', { name: 'Usar este mosaico', exact: true })
+  await expect(apply).toBeEnabled()
+  const ends = await countSpinnerEnds(converter, '.photo-pattern-reading')
+  const sensitivity = converter.getByRole('slider', { name: /^Sensibilidade/ })
+  for (const value of ['10', '20', '30', '40', '50', '60', '70', '80']) {
+    await sensitivity.fill(value)
+    await page.waitForTimeout(40)
+  }
+  expect(await ends()).toBe(0)
+  await expect(apply).toBeEnabled()
+  expect(await ends()).toBe(1)
+
+  await converter.getByRole('button', { name: 'Abrir no Estúdio de filé' }).click()
+  await expect(converter).toBeHidden()
+  const dialog = page.getByRole('dialog', { name: 'Estúdio de filé' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Importar foto ou gráfico', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(dialog.getByText('toalha-da-vo.png', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('Grade detectada: 30 × 12 quadradinhos', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Usar este gráfico', exact: true }).click()
+  await expect(dialog.getByText('12 carreiras × 30 colunas', { exact: false })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await dialog.getByRole('button', { name: 'Exportar JSON', exact: true }).click()
+  const exported = JSON.parse(await readFile((await (await download).path())!, 'utf8')) as { cells: string[] }
+  expect(exported.cells).toEqual(EXPECTED.filled.map((row) => row.map((v) => (v ? '1' : '0')).join('')))
+
+  // A later import starts empty.
+  await dialog.getByRole('button', { name: 'Importar foto ou gráfico', exact: true }).click()
+  await expect(dialog.getByText('Envie o print ou a foto do gráfico.', { exact: true })).toBeVisible()
 })
