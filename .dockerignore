@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-server
+data
+.scratch
+.git
+.claude
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.env*
