@@ -6,15 +6,17 @@ import { NO_ORIENTATION, orientMatrix, type ChartOrientation } from '../file'
 import { decodePhotoFile, samplePhoto, type DecodedPhoto } from '../lib/photo-image'
 import { automaticPhotoThreshold, convertChartAnalysis, convertPhotoPixels, type PhotoFit, type PhotoPatternResult } from '../lib/photo-pattern'
 import { analyzeChartImage, findContentBox, type AnalyzeOptions, type ChartAnalysis, type RgbaImage } from '../lib/vision'
+import { boundCache } from './analysis-cache'
 import { PatternPreview } from './PatternPreview'
+import type { ImportSeed } from './file/FileImport'
 import './photo-pattern.css'
 
 interface PhotoPatternDialogProps {
   onClose: () => void
   onApply: (design: DesignData) => void
   colors: Record<Yarn, string>
-  /** Offered when a chart is detected: the filé studio reproduces it exactly. */
-  onOpenFileStudio?: () => void
+  /** Offered when a chart is detected: the filé studio reproduces it exactly, starting from this picture. */
+  onOpenFileStudio?: (seed: ImportSeed) => void
 }
 
 type ReadAs = 'chart' | 'photo'
@@ -33,6 +35,10 @@ interface AnalysisCache {
 }
 
 const BASE_KEY = 'base'
+/** Analyses kept per picture besides the base one: enough to go back and forth, never unbounded. */
+const CACHE_LIMIT = 8
+/** The sensitivity slider re-reads the whole picture: only once it rests this long (ms). */
+const SLIDER_SETTLE = 150
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : 'Não foi possível preparar esta foto. Tente outra imagem.'
@@ -81,6 +87,8 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
   const [readAs, setReadAs] = useState<ReadAs>('chart')
   const [sizeMode, setSizeMode] = useState<SizeMode>('auto')
   const [rowsPerChartRow, setRowsPerChartRow] = useState<1 | 2>(1)
+  /** Slider position; `inkBias` follows it once it settles. */
+  const [biasDraft, setBiasDraft] = useState(0)
   const [inkBias, setInkBias] = useState(0)
   const [orientation, setOrientation] = useState<ChartOrientation>(NO_ORIENTATION)
   const [analyses, setAnalyses] = useState<AnalysisCache>({ image: null, byKey: {}, latest: null })
@@ -122,7 +130,14 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
   }, [image, readsChart, sizeMode, cols, manualRows, inkBias])
   const missing = requests.filter((request) => lookup(request.key) === undefined)
   const missingKey = missing.map((request) => request.key).join('|')
-  const analyzing = missing.length > 0
+  const settling = biasDraft !== inkBias
+  const analyzing = missing.length > 0 || (readsChart && settling)
+
+  useEffect(() => {
+    if (!settling) return
+    const timer = window.setTimeout(() => setInkBias(biasDraft), SLIDER_SETTLE)
+    return () => clearTimeout(timer)
+  }, [biasDraft, settling])
 
   useEffect(() => {
     if (!image || !missing.length) return
@@ -140,7 +155,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
         }
         setAnalyses((previous) => ({
           image,
-          byKey: previous.image === image ? { ...previous.byKey, ...computed } : computed,
+          byKey: boundCache(previous.image === image ? { ...previous.byKey, ...computed } : computed, BASE_KEY, CACHE_LIMIT),
           latest: missing.at(-1)!.key,
         }))
       }, 0)
@@ -224,6 +239,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
       setSizeMode('auto')
       setRowsPerChartRow(1)
       setInkBias(0)
+      setBiasDraft(0)
       setOrientation(NO_ORIENTATION)
     } catch (err) {
       if (request === fileRequest.current) setError(message(err))
@@ -342,7 +358,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
                 <Grid3x3 size={17} aria-hidden="true" />
                 <div>
                   <p>O mosaico overlay adapta o gráfico às regras de pontos altos; para reproduzir um gráfico de filé exatamente, use o Estúdio de filé.</p>
-                  {onOpenFileStudio && <button type="button" className="photo-pattern-secondary photo-pattern-file-studio" onClick={onOpenFileStudio}>Abrir no Estúdio de filé<ArrowRight size={14} /></button>}
+                  {onOpenFileStudio && <button type="button" className="photo-pattern-secondary photo-pattern-file-studio" onClick={() => source && onOpenFileStudio({ source, fileName })}>Abrir no Estúdio de filé<ArrowRight size={14} /></button>}
                 </div>
               </div>
             ) : (
@@ -387,7 +403,7 @@ export function PhotoPatternDialog({ onClose, onApply, colors, onOpenFileStudio 
                   <button type="button" onClick={() => setOrientation((o) => ({ ...o, rotate180: !o.rotate180 }))} aria-pressed={orientation.rotate180}><RotateCw size={14} />Girar 180°</button>
                   <button type="button" onClick={() => setOrientation((o) => ({ ...o, mirror: !o.mirror }))} aria-pressed={orientation.mirror}><FlipHorizontal2 size={14} />Espelhar</button>
                 </div></fieldset>
-                <label className="photo-pattern-field photo-pattern-range">Sensibilidade<output>{signed(Math.round(inkBias * 100))}</output><input type="range" aria-label="Sensibilidade" min="-100" max="100" step="5" value={Math.round(inkBias * 100)} onChange={(event) => setInkBias(Number(event.target.value) / 100)} /></label>
+                <label className="photo-pattern-field photo-pattern-range">Sensibilidade<output>{signed(Math.round(biasDraft * 100))}</output><input type="range" aria-label="Sensibilidade" min="-100" max="100" step="5" value={Math.round(biasDraft * 100)} onChange={(event) => setBiasDraft(Number(event.target.value) / 100)} /></label>
                 <p className="photo-pattern-hint photo-pattern-range-hint">Para a direita, mais quadradinhos contam como cheios.</p>
               </>
             ) : (

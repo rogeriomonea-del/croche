@@ -6,12 +6,14 @@ import { createWakeLock } from '../../lib/wake-lock'
 import { fileStudioReducer, loadFileStudio, saveFileStudio, type FileStudioAction } from '../../state/file-studio'
 import { FileChartCanvas } from './FileChartCanvas'
 import { FileEditPanel } from './FileEditPanel'
-import { FileImport } from './FileImport'
-import { FileReader } from './FileReader'
+import { FileImport, type ImportSeed } from './FileImport'
+import { FileReader, FileReadingStrip } from './FileReader'
 import { fitCell, segmentColumns, zoomStep } from './geometry'
 import './file-studio.css'
 
 interface FileStudioProps {
+  /** Open on the import, with this picture already being read. */
+  initialImport?: ImportSeed
   onClose: () => void
 }
 
@@ -25,24 +27,28 @@ function safeStorage(): Storage | null {
 }
 
 const SAVE_DELAY = 300
-const NAVIGATION = new Set(['moveSegment', 'moveRow', 'selectRow', 'selectSegment'])
+/** Below this width the reader is not a side column (see file-studio.css). */
+const NARROW_SCREEN = '(max-width: 999px)'
+/** Row pitch, in CSS pixels, a fingertip can pick on a narrow screen in Tecer (every row numbered). */
+const TOUCH_ROW_PITCH = 16
 
 function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
 }
 
-export function FileStudio({ onClose }: FileStudioProps) {
+export function FileStudio({ initialImport, onClose }: FileStudioProps) {
   const dialog = useRef<HTMLDialogElement>(null)
   const chartPanel = useRef<HTMLElement>(null)
   const readerAnchor = useRef<HTMLDivElement>(null)
   const [state, dispatch] = useReducer(fileStudioReducer, undefined, () => loadFileStudio(safeStorage()))
-  const [importing, setImporting] = useState(false)
+  const [importing, setImporting] = useState(!!initialImport)
+  // The handed-over picture is read once; a later import starts empty.
+  const [seed, setSeed] = useState(initialImport)
   const [cell, setCell] = useState(12)
   const [autoFit, setAutoFit] = useState(true)
   const speaker = useMemo(() => createSpeaker(), [])
   const wakeLock = useMemo(() => createWakeLock(), [])
   const latest = useRef(state)
-  const speakNext = useRef(false)
   const spokenRow = useRef<number | null>(null)
 
   const { chart, mode, reading: readingOptions, progress, autoRead } = state
@@ -101,8 +107,10 @@ export function FileStudio({ onClose }: FileStudioProps) {
     if (!panel) return
     const style = getComputedStyle(panel)
     const width = panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-    if (width > 0) setCell(fitCell(width - 1, rows, cols, 3, 28))
-  }, [rows, cols])
+    // Tecer on a narrow screen: rows tall enough to tap, the chart scrolls sideways instead.
+    const touch = mode === 'tecer' && !!window.matchMedia?.(NARROW_SCREEN).matches
+    if (width > 0) setCell(fitCell(width - 1, rows, cols, touch ? TOUCH_ROW_PITCH : 3, 28))
+  }, [rows, cols, mode])
   // Fit the chart on first paint, when its size changes, and when the screen changes size, until
   // the user picks a zoom; "Ajustar" goes back to fitting.
   useLayoutEffect(() => {
@@ -115,21 +123,22 @@ export function FileStudio({ onClose }: FileStudioProps) {
     return () => observer.disconnect()
   }, [fit, importing, autoFit])
 
-  const act = useCallback((action: FileStudioAction) => {
-    if (NAVIGATION.has(action.type)) speakNext.current = true
-    dispatch(action)
-  }, [])
-
-  // Read aloud after moving, when asked to.
-  useEffect(() => {
-    if (!speakNext.current) return
-    speakNext.current = false
-    if (!autoRead || mode !== 'tecer') return
-    const chunk = speechChunks(reading)[segment] ?? ''
-    if (spokenRow.current !== reading.row) speaker.speak(`Carreira ${reading.row}, ${reading.direction}. ${chunk}.`)
+  /**
+   * Navigation: applies the actions and, when they moved somewhere and reading aloud is on, says the
+   * new position right away, inside the user's gesture (iOS only speaks from one).
+   */
+  function act(...actions: FileStudioAction[]) {
+    const previous = latest.current
+    const next = actions.reduce(fileStudioReducer, previous)
+    latest.current = next
+    for (const action of actions) dispatch(action)
+    if (next === previous || !next.autoRead || next.mode !== 'tecer') return
+    const nextReading = rowReading(next.chart, next.progress.row, next.reading)
+    const chunk = speechChunks(nextReading)[Math.min(next.progress.segment, nextReading.segments.length - 1)] ?? ''
+    if (spokenRow.current !== nextReading.row) speaker.speak(`Carreira ${nextReading.row}, ${nextReading.direction}. ${chunk}.`)
     else speaker.speak(`${chunk}.`)
-    spokenRow.current = reading.row
-  }, [reading, segment, autoRead, mode, speaker])
+    spokenRow.current = nextReading.row
+  }
 
   function speakRow() {
     spokenRow.current = reading.row
@@ -148,8 +157,7 @@ export function FileStudio({ onClose }: FileStudioProps) {
   }
 
   function selectFromRecipe(row: number) {
-    act({ type: 'selectRow', row })
-    if (mode !== 'tecer') dispatch({ type: 'setMode', mode: 'tecer' })
+    act({ type: 'selectRow', row }, { type: 'setMode', mode: 'tecer' })
     const smooth = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     requestAnimationFrame(() => readerAnchor.current?.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' }))
   }
@@ -207,6 +215,10 @@ export function FileStudio({ onClose }: FileStudioProps) {
 
   const doneCount = progress.doneRows.length
 
+  useEffect(() => {
+    if (!importing) setSeed(undefined)
+  }, [importing])
+
   return (
     <dialog
       ref={dialog}
@@ -255,7 +267,7 @@ export function FileStudio({ onClose }: FileStudioProps) {
         </div>
 
         {importing ? (
-          <FileImport onUse={applyImported} onCancel={() => setImporting(false)} />
+          <FileImport initial={seed} onUse={applyImported} onCancel={() => setImporting(false)} />
         ) : (
           <div className={`file-studio-main is-${mode}`}>
             <section ref={chartPanel} className="file-chart-panel" aria-label="Gráfico">
@@ -277,6 +289,9 @@ export function FileStudio({ onClose }: FileStudioProps) {
                   <span><i style={{ background: chart.colors.open }} />aberto</span>
                 </p>
               </div>
+              {mode === 'tecer' && (
+                <FileReadingStrip reading={reading} rows={rows} segment={segment} onMoveSegment={(delta) => act({ type: 'moveSegment', delta })} />
+              )}
               <FileChartCanvas
                 chart={chart}
                 mode={mode}

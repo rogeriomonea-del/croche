@@ -14,9 +14,23 @@ import { decodePhotoFile, type DecodedPhoto } from '../../lib/photo-image'
 import { analyzeChartImage, type ChartAnalysis, type RgbaImage } from '../../lib/vision'
 import { documentName } from '../../state/file-studio'
 
+/** A picture already decoded elsewhere (the mosaic photo converter), to be read here at once. */
+export interface ImportSeed {
+  source: DecodedPhoto
+  fileName: string
+}
+
 interface FileImportProps {
+  initial?: ImportSeed
   onUse: (chart: FileChart) => void
   onCancel: () => void
+}
+
+function pixels(decoded: DecodedPhoto): RgbaImage {
+  const ctx = decoded.canvas.getContext('2d')
+  if (!ctx) throw new Error('O navegador não conseguiu abrir a área de imagem.')
+  const data = ctx.getImageData(0, 0, decoded.canvas.width, decoded.canvas.height)
+  return { width: data.width, height: data.height, data: data.data }
 }
 
 type Size = { cols: number; rows: number }
@@ -35,6 +49,8 @@ function sameSize(a: Size | null, b: Size | null): boolean {
 }
 
 const HEX = /^#[0-9a-f]{6}$/
+/** The sensitivity slider re-reads the whole picture: only once it rests this long (ms). */
+const SLIDER_SETTLE = 150
 
 function hex(value: string, fallback: string): string {
   const v = value.trim().toLowerCase()
@@ -112,17 +128,27 @@ function ResultPreview({ analysis, ink, invert }: { analysis: ChartAnalysis; ink
   return <canvas ref={ref} role="img" aria-label={`Gráfico lido: ${analysis.cols} × ${analysis.rows} quadradinhos`} />
 }
 
-export function FileImport({ onUse, onCancel }: FileImportProps) {
+export function FileImport({ initial, onUse, onCancel }: FileImportProps) {
   const fileInput = useRef<HTMLInputElement>(null)
   const request = useRef(0)
-  const [source, setSource] = useState<DecodedPhoto | null>(null)
-  const [image, setImage] = useState<RgbaImage | null>(null)
-  const [fileName, setFileName] = useState('')
+  const [seeded] = useState(() => {
+    if (!initial) return { image: null, error: null }
+    try {
+      return { image: pixels(initial.source), error: null }
+    } catch (err) {
+      return { image: null, error: message(err) }
+    }
+  })
+  const [source, setSource] = useState<DecodedPhoto | null>(seeded.image ? initial!.source : null)
+  const [image, setImage] = useState<RgbaImage | null>(seeded.image)
+  const [fileName, setFileName] = useState(seeded.image ? initial!.fileName : '')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AnalysisResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(seeded.error)
   const [invert, setInvert] = useState(false)
   const [orientation, setOrientation] = useState<ChartOrientation>(NO_ORIENTATION)
+  /** Slider position (right = more fechados); `inkBias` follows it once it settles. */
+  const [biasDraft, setBiasDraft] = useState(0)
   const [inkBias, setInkBias] = useState(0)
   const [manual, setManual] = useState<Size | null>(null)
   /** The grid's own cell counts, when a grid was found; kept while a corrected size is read. */
@@ -135,13 +161,22 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
 
   // Busy is known in the same render as the change that asks for a new analysis, so the spinner
   // and the disabled controls paint before the (synchronous) analysis takes the main thread.
+  // The analysis biases towards ink; with fechado/aberto swapped, more fechados means less ink.
+  const analysisBias = invert ? -inkBias : inkBias
   const current = result && result.image === image ? result : null
-  const fresh = !!current && current.inkBias === inkBias && sameSize(current.manual, manual)
-  const analysing = !!image && !fresh
+  const fresh = !!current && current.inkBias === analysisBias && sameSize(current.manual, manual)
+  const settling = biasDraft !== inkBias
+  const analysing = !!image && (!fresh || settling)
   const analysis = current?.analysis ?? null
 
   // Analysis runs after a frame. A newer change cancels a pending run, and a result only counts
   // as fresh when it was made from the current inputs, so an older result never wins.
+  useEffect(() => {
+    if (!settling) return
+    const timer = setTimeout(() => setInkBias(biasDraft), SLIDER_SETTLE)
+    return () => clearTimeout(timer)
+  }, [biasDraft, settling])
+
   useEffect(() => {
     if (!image || fresh) return
     let cancelled = false
@@ -151,9 +186,9 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
         if (cancelled) return
         let next: AnalysisResult
         try {
-          next = { image, inkBias, manual, analysis: analyzeChartImage(image, { inkBias, ...(manual ?? {}) }), error: null }
+          next = { image, inkBias: analysisBias, manual, analysis: analyzeChartImage(image, { inkBias: analysisBias, ...(manual ?? {}) }), error: null }
         } catch (err) {
-          next = { image, inkBias, manual, analysis: null, error: message(err) }
+          next = { image, inkBias: analysisBias, manual, analysis: null, error: message(err) }
         }
         if (cancelled) return
         setResult(next)
@@ -169,7 +204,7 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
       cancelAnimationFrame(frame)
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [image, inkBias, manual, fresh])
+  }, [image, analysisBias, manual, fresh])
 
   const orientedInk = useMemo(() => (analysis ? orientMatrix(analysis.ink, orientation) : null), [analysis, orientation])
 
@@ -181,9 +216,7 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
     try {
       const decoded = await decodePhotoFile(file)
       if (id !== request.current) return
-      const ctx = decoded.canvas.getContext('2d')
-      if (!ctx) throw new Error('O navegador não conseguiu abrir a área de imagem.')
-      const data = ctx.getImageData(0, 0, decoded.canvas.width, decoded.canvas.height)
+      const read = pixels(decoded)
       setSource(decoded)
       setFileName(file.name)
       setResult(null)
@@ -192,7 +225,8 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
       setInvert(false)
       setOrientation(NO_ORIENTATION)
       setInkBias(0)
-      setImage({ width: data.width, height: data.height, data: data.data })
+      setBiasDraft(0)
+      setImage(read)
     } catch (err) {
       if (id === request.current) setError(message(err))
     } finally {
@@ -363,7 +397,7 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
               </label>
               <label className="file-field file-range">
                 <span>
-                  Sensibilidade <output>{inkBias > 0 ? '+' : ''}{inkBias.toFixed(2)}</output>
+                  Sensibilidade <output>{biasDraft > 0 ? '+' : ''}{biasDraft.toFixed(2)}</output>
                 </span>
                 <input
                   type="range"
@@ -371,10 +405,10 @@ export function FileImport({ onUse, onCancel }: FileImportProps) {
                   min={-1}
                   max={1}
                   step={0.05}
-                  value={inkBias}
-                  onChange={(event) => setInkBias(Number(event.target.value))}
+                  value={biasDraft}
+                  onChange={(event) => setBiasDraft(Number(event.target.value))}
                 />
-                <small>Para a esquerda, menos quadradinhos fechados; para a direita, mais.</small>
+                <small>Para a esquerda, menos quadradinhos fechados; para a direita, mais (também com fechado/aberto invertidos).</small>
               </label>
             </div>
           )}
